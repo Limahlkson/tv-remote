@@ -262,6 +262,29 @@ public class MainActivity extends Activity {
         Widgets.CircleButton home = new Widgets.CircleButton(this, Icons.HOME, ORANGE, 0xFFFFFFFF).ring(CARD, ring)
                 .iconScale(0.36f).action(this::homePressed, false);
         padArea.addView(home, cornerLp(corner + dp(24), Gravity.BOTTOM | Gravity.END));
+
+        // Rewind, play/pause and fast forward in an arc around Home
+        float homeSize = 74 + 24, homeCentre = homeSize / 2f - 10; // dp from the pad's bottom-right corner
+        float small = 52, arc = homeSize / 2f + small / 2f + 8;
+        int[] mediaIcons = {Icons.REWIND, Icons.PLAY_PAUSE, Icons.FFWD};
+        Runnable[] mediaActions = {
+                () -> ftvCall(() -> ftv.scan(false)),
+                () -> ftvCall(ftv::playPause),
+                () -> ftvCall(() -> ftv.scan(true))
+        };
+        double[] angles = {180, 225, 270}; // left of Home, diagonal, above Home
+        for (int i = 0; i < 3; i++) {
+            double a = Math.toRadians(angles[i]);
+            float fromRight = homeCentre - (float) (arc * Math.cos(a));
+            float fromBottom = homeCentre - (float) (arc * Math.sin(a));
+            Widgets.CircleButton mb = new Widgets.CircleButton(this, mediaIcons[i], BTN, TEXT)
+                    .iconScale(0.3f).action(mediaActions[i], false);
+            FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(dp(small), dp(small),
+                    Gravity.BOTTOM | Gravity.END);
+            mlp.setMarginEnd(dp(fromRight - small / 2f));
+            mlp.bottomMargin = dp(fromBottom - small / 2f);
+            padArea.addView(mb, mlp);
+        }
         LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(-1, 0, 1f);
         padLp.topMargin = dp(14);
         card.addView(padArea, padLp);
