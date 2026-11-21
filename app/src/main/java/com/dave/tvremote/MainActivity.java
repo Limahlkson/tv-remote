@@ -246,6 +246,20 @@ public class MainActivity extends Activity {
         blp.bottomMargin = dp(6);
         card.addView(banner, blp);
 
+        voiceBanner = new TextView(this);
+        voiceBanner.setTextColor(0xFFFFFFFF);
+        voiceBanner.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        voiceBanner.setGravity(Gravity.CENTER);
+        voiceBanner.setPadding(dp(10), dp(8), dp(10), dp(8));
+        GradientDrawable vb = new GradientDrawable();
+        vb.setColor(0xFF2E7D32);
+        vb.setCornerRadius(dp(12));
+        voiceBanner.setBackground(vb);
+        voiceBanner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(-1, -2);
+        vlp.bottomMargin = dp(6);
+        card.addView(voiceBanner, vlp);
+
         // pad area with notched corner buttons
         padArea = new FrameLayout(this);
         trackpad = new Widgets.TouchPad(this, PAD, padListener);
@@ -263,8 +277,8 @@ public class MainActivity extends Activity {
                 .iconScale(0.36f).action(() -> irPress(IrRemote.MUTE, false), false);
         padArea.addView(mute, cornerLp(corner, Gravity.TOP | Gravity.END));
         Widgets.CircleButton mic = new Widgets.CircleButton(this, Icons.MIC, 0xFFCC0000, 0xFFFFFFFF)
-                .iconScale(0.34f).action(this::startYouTubeVoiceSearch, false)
-                .longAction(this::askYouTubeTyped);
+                .iconScale(0.34f).action(this::voiceDown, false).release(this::voiceUp);
+        micBtn = mic;
         FrameLayout.LayoutParams micLp = new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.TOP | Gravity.END);
         micLp.topMargin = corner - dp(10) + dp(8);
         micLp.setMarginEnd((corner - dp(54)) / 2 - dp(10));
@@ -603,32 +617,173 @@ public class MainActivity extends Activity {
         }
     }
 
-    static final int REQ_SPEECH = 42;
+    // ---- hold-to-talk voice search -------------------------------------------------------
 
-    void startYouTubeVoiceSearch() {
+    static final int REQ_MIC = 43;
+    android.speech.SpeechRecognizer recognizer;
+    boolean listening, voiceHandled, micHeld;
+    String lastPartial;
+    Widgets.CircleButton micBtn;
+    TextView voiceBanner;
+
+    /** Mic pressed: start listening straight away. */
+    void voiceDown() {
         if (!checkPaired()) return;
         buzz();
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+            return;
+        }
+        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
+            askYouTubeTyped(); // no speech service on the phone: type it instead
+            return;
+        }
+        if (recognizer == null) {
+            recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
+            recognizer.setRecognitionListener(voiceListener);
+        }
         android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 android.speech.RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-GB");
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Search YouTube for…");
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+        // keep listening while the button is held, even through short pauses
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000);
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000);
+        lastPartial = null;
+        voiceHandled = false;
+        micHeld = true;
+        listening = true;
+        showVoiceBanner("Listening… let go to search");
+        micBtn.setFill(0xFF2E7D32);
         try {
-            startActivityForResult(i, REQ_SPEECH);
+            recognizer.startListening(i);
         } catch (Exception e) {
-            askYouTubeTyped(); // no speech recogniser on the phone: type it instead
+            endVoiceUi();
+            toast("Couldn't start the microphone");
+        }
+    }
+
+    /** Mic released: stop listening; the result arrives a moment later and runs the search. */
+    void voiceUp() {
+        micHeld = false;
+        if (!listening || recognizer == null) return;
+        showVoiceBanner(lastPartial != null ? "“" + lastPartial + "”  searching…" : "Working it out…");
+        try {
+            recognizer.stopListening();
+        } catch (Exception ignored) {
+        }
+    }
+
+    final android.speech.RecognitionListener voiceListener = new android.speech.RecognitionListener() {
+        @Override
+        public void onReadyForSpeech(Bundle params) {
+        }
+
+        @Override
+        public void onBeginningOfSpeech() {
+        }
+
+        @Override
+        public void onRmsChanged(float rmsdB) {
+        }
+
+        @Override
+        public void onBufferReceived(byte[] buffer) {
+        }
+
+        @Override
+        public void onEndOfSpeech() {
+        }
+
+        @Override
+        public void onError(int error) {
+            listening = false;
+            if (!voiceHandled && lastPartial != null && !lastPartial.isEmpty()) {
+                voiceHandled = true;
+                endVoiceUi();
+                runYouTubeSearch(lastPartial);
+                return;
+            }
+            endVoiceUi();
+            if (error == android.speech.SpeechRecognizer.ERROR_NO_MATCH
+                    || error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                toast("Didn't catch that. Hold the mic and speak, then let go.");
+            } else if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                toast("Microphone permission is needed for voice search");
+            } else if (error == android.speech.SpeechRecognizer.ERROR_NETWORK
+                    || error == android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
+                toast("Voice needs an internet connection");
+            } else {
+                toast("Voice search error (" + error + "). Try again.");
+                if (recognizer != null) {
+                    recognizer.destroy();
+                    recognizer = null;
+                }
+            }
+        }
+
+        @Override
+        public void onResults(Bundle results) {
+            listening = false;
+            java.util.ArrayList<String> r =
+                    results.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+            String text = (r != null && !r.isEmpty()) ? r.get(0).trim() : null;
+            if (text == null || text.isEmpty()) text = lastPartial;
+            endVoiceUi();
+            if (voiceHandled) return;
+            voiceHandled = true;
+            if (text == null || text.isEmpty()) {
+                toast("Didn't catch that. Hold the mic and speak, then let go.");
+            } else {
+                runYouTubeSearch(text);
+            }
+        }
+
+        @Override
+        public void onPartialResults(Bundle partial) {
+            java.util.ArrayList<String> r =
+                    partial.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+            if (r != null && !r.isEmpty() && !r.get(0).trim().isEmpty()) {
+                lastPartial = r.get(0).trim();
+                showVoiceBanner("“" + lastPartial + "”" + (micHeld ? "  let go to search" : "  searching…"));
+            }
+        }
+
+        @Override
+        public void onEvent(int eventType, Bundle params) {
+        }
+    };
+
+    void showVoiceBanner(String text) {
+        voiceBanner.setText(text);
+        voiceBanner.setVisibility(View.VISIBLE);
+    }
+
+    void endVoiceUi() {
+        voiceBanner.setVisibility(View.GONE);
+        micBtn.setFill(0xFFCC0000);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_MIC) {
+            if (grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                toast("Mic ready. Hold the mic button, speak, then let go.");
+            } else {
+                toast("Voice search needs the microphone");
+            }
         }
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQ_SPEECH || resultCode != RESULT_OK || data == null) return;
-        java.util.ArrayList<String> res =
-                data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
-        if (res == null || res.isEmpty() || res.get(0).trim().isEmpty()) return;
-        runYouTubeSearch(res.get(0).trim());
+    protected void onDestroy() {
+        if (recognizer != null) recognizer.destroy();
+        super.onDestroy();
     }
 
     void askYouTubeTyped() {
@@ -845,6 +1000,7 @@ public class MainActivity extends Activity {
                 "Voice search app: " + (prefs.getBoolean("useSmartTube", true)
                         ? "SmartTube" + (smartTubePackage() == null ? " (not found on Fire TV yet)" : "")
                         : "YouTube"),
+                "Type a search instead of speaking…",
         };
         new AlertDialog.Builder(this, R.style.DialogTheme)
                 .setTitle("Remote settings")
@@ -868,6 +1024,9 @@ public class MainActivity extends Activity {
                             break;
                         case 6:
                             prefs.edit().putBoolean("useSmartTube", !prefs.getBoolean("useSmartTube", true)).apply();
+                            break;
+                        case 7:
+                            if (checkPaired()) askYouTubeTyped();
                             break;
                         default:
                             break;
