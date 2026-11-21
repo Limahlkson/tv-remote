@@ -102,6 +102,7 @@ public class MainActivity extends Activity {
         updateTitle();
 
         if (!ftv.isPaired()) h.postDelayed(this::showDevicePicker, 600);
+        handleShare(getIntent());
     }
 
     @Override
@@ -645,8 +646,7 @@ public class MainActivity extends Activity {
     }
 
     static final long TAP_MS = 450;           // shorter than this = tap (open search), longer = speech
-    static final long SEARCH_OPEN_FOR_MS = 90_000;
-    long micDownAt, lastSearchOpenAt;
+    long micDownAt;
     boolean recording;
     final Runnable showListening = () -> {
         if (micHeld && recording) {
@@ -738,18 +738,15 @@ public class MainActivity extends Activity {
             if (err != null) {
                 searchError(err);
             } else {
-                lastSearchOpenAt = System.currentTimeMillis();
-                toast(app + " search is open. Hold the mic and speak.");
+                toast("Search box ready. Hold the mic and speak.");
             }
         });
     }
 
-    /** Spoken words: type them into the search box (opening it first if it wasn't opened recently). */
+    /** Spoken words: type them into the search box that's already open, then Select to search. */
     void sendSpokenSearch(String q) {
-        boolean openFirst = System.currentTimeMillis() - lastSearchOpenAt > SEARCH_OPEN_FOR_MS;
         showVoiceBanner("Typing on TV:  “" + q + "”");
-        ftv.typeSearch(q, openFirst, searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
-            lastSearchOpenAt = 0; // after a search the box isn't focused any more
+        ftv.typeSearch(q, false, searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
             h.postDelayed(this::endVoiceUi, 2500);
             if (err != null) searchError(err);
         });
@@ -891,7 +888,6 @@ public class MainActivity extends Activity {
         if (!checkPaired()) return;
         toast("Searching " + (searchUsesSmartTube() ? "SmartTube" : "YouTube") + " for \"" + q + "\"…");
         ftv.typeSearch(q, true, searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
-            lastSearchOpenAt = 0;
             if (err != null) searchError(err);
         });
     }
@@ -901,10 +897,22 @@ public class MainActivity extends Activity {
     YouTubeAccount yt;
 
     static class Channel {
-        String id = "", title = "";
+        String id = "", title = "", handle = "";
 
         String key() {
-            return id.isEmpty() ? "name:" + title.toLowerCase() : id;
+            if (!id.isEmpty()) return id;
+            if (!handle.isEmpty()) return handle.toLowerCase();
+            return "name:" + title.toLowerCase();
+        }
+
+        String avatarKey() {
+            return !id.isEmpty() ? id : handle;
+        }
+
+        String pageUrl() {
+            if (!id.isEmpty()) return "https://www.youtube.com/channel/" + id;
+            if (!handle.isEmpty()) return "https://www.youtube.com/" + handle;
+            return null;
         }
     }
 
@@ -960,6 +968,7 @@ public class MainActivity extends Activity {
                 Channel c = new Channel();
                 c.id = o.optString("id", "");
                 c.title = o.optString("title", "");
+                c.handle = o.optString("handle", "");
                 if (!c.title.isEmpty()) out.add(c);
             }
         } catch (Exception ignored) {
@@ -972,7 +981,7 @@ public class MainActivity extends Activity {
         org.json.JSONArray arr = new org.json.JSONArray();
         for (Channel c : list) {
             try {
-                arr.put(new org.json.JSONObject().put("id", c.id).put("title", c.title));
+                arr.put(new org.json.JSONObject().put("id", c.id).put("title", c.title).put("handle", c.handle));
             } catch (Exception ignored) {
             }
         }
@@ -1077,8 +1086,10 @@ public class MainActivity extends Activity {
 
     /** Best effort: channel picture from the public channel page, cached. */
     void loadAvatar(Channel c, ImageView into) {
-        if (c.id.isEmpty()) return;
-        String cachedUrl = prefs.getString("avatar_" + c.id, null);
+        String akey = c.avatarKey();
+        String page = c.pageUrl();
+        if (akey.isEmpty() || page == null) return;
+        String cachedUrl = prefs.getString("avatar_" + akey, null);
         if (cachedUrl != null && !cachedUrl.isEmpty()) {
             showAvatar(cachedUrl, into);
             return;
@@ -1088,7 +1099,7 @@ public class MainActivity extends Activity {
             String found = "";
             try {
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
-                        new java.net.URL("https://www.youtube.com/channel/" + c.id).openConnection();
+                        new java.net.URL(page).openConnection();
                 conn.setConnectTimeout(5000);
                 conn.setReadTimeout(8000);
                 conn.setRequestProperty("User-Agent",
@@ -1115,7 +1126,7 @@ public class MainActivity extends Activity {
             }
             final String url = found;
             h.post(() -> {
-                prefs.edit().putString("avatar_" + c.id, url).apply();
+                prefs.edit().putString("avatar_" + akey, url).apply();
                 if (!url.isEmpty()) showAvatar(url, into);
             });
         });
@@ -1168,19 +1179,21 @@ public class MainActivity extends Activity {
     void channelSourcesMenu(String title) {
         List<String> labels = new ArrayList<>();
         List<Runnable> actions = new ArrayList<>();
+        labels.add("Add from the YouTube app (Share > TV Remote, no setup)");
+        actions.add(this::showShareHelp);
+        labels.add("Add a channel by name");
+        actions.add(this::askAddChannel);
         if (yt.signedIn()) {
-            labels.add("Refresh from my YouTube account");
+            labels.add("Whole list: refresh from my YouTube account");
             actions.add(this::importFromYouTube);
         } else {
-            labels.add("Sign in with YouTube (fetch my subscriptions)");
+            labels.add("Whole list: sign in with YouTube (needs a one-off Google setup)");
             actions.add(this::signInYouTube);
         }
-        labels.add("Import a Google Takeout file instead");
+        labels.add("Whole list: import a Google Takeout file");
         actions.add(this::startImport);
         labels.add("How to get the Takeout file");
         actions.add(this::showTakeoutHelp);
-        labels.add("Add a channel by name");
-        actions.add(this::askAddChannel);
         if (yt.signedIn()) {
             labels.add("Sign out of YouTube");
             actions.add(() -> {
@@ -1361,6 +1374,150 @@ public class MainActivity extends Activity {
             toast(subs.size() + " subscriptions (" + added + " new). Tick your favourites.");
             showChannelManager();
         });
+    }
+
+    void showShareHelp() {
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Add from the YouTube app")
+                .setMessage("In the YouTube app on this phone, open a channel (or any video from it), tap Share, "
+                        + "then pick TV Remote.\n\nThe channel goes straight into your Channels tab as a favourite. "
+                        + "Nothing to sign in to or set up.")
+                .setPositiveButton("Open YouTube", (d, w) -> {
+                    android.content.Intent i = getPackageManager().getLaunchIntentForPackage("com.google.android.youtube");
+                    if (i != null) startActivity(i);
+                    else openUrl("https://www.youtube.com/");
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleShare(intent);
+    }
+
+    /** A link shared from the YouTube app (channel or video) adds that channel to favourites. */
+    void handleShare(android.content.Intent intent) {
+        if (intent == null || !android.content.Intent.ACTION_SEND.equals(intent.getAction())) return;
+        String text = intent.getStringExtra(android.content.Intent.EXTRA_TEXT);
+        intent.setAction(null); // don't add it again on rotation
+        if (text == null || !(text.contains("youtube.com") || text.contains("youtu.be"))) {
+            toast("Share a YouTube channel or video to add it");
+            return;
+        }
+        addSharedChannel(text);
+    }
+
+    void addSharedChannel(String text) {
+        toast("Adding channel…");
+        avatarExec.execute(() -> {
+            String err = null;
+            Channel c = new Channel();
+            String image = null;
+            try {
+                java.util.regex.Matcher um = java.util.regex.Pattern.compile("https?://\\S+").matcher(text);
+                if (!um.find()) throw new IllegalStateException("No YouTube link in that share");
+                String url = um.group();
+                String name = null, pageUrl = null;
+                java.util.regex.Pattern pHandle = java.util.regex.Pattern.compile("youtube\\.com/(@[^/?#\\s]+)");
+                java.util.regex.Pattern pId = java.util.regex.Pattern.compile("youtube\\.com/channel/(UC[\\w-]+)");
+                java.util.regex.Pattern pLegacy = java.util.regex.Pattern.compile("youtube\\.com/((?:c|user)/[^/?#\\s]+)");
+                java.util.regex.Matcher m;
+                if ((m = pHandle.matcher(url)).find()) {
+                    c.handle = java.net.URLDecoder.decode(m.group(1), "UTF-8");
+                } else if ((m = pId.matcher(url)).find()) {
+                    c.id = m.group(1);
+                } else if ((m = pLegacy.matcher(url)).find()) {
+                    pageUrl = "https://www.youtube.com/" + m.group(1);
+                } else {
+                    // a video or short: YouTube's public oEmbed says whose it is
+                    java.util.regex.Matcher sm = java.util.regex.Pattern.compile("/shorts/([\\w-]+)").matcher(url);
+                    if (sm.find()) url = "https://www.youtube.com/watch?v=" + sm.group(1);
+                    org.json.JSONObject o = new org.json.JSONObject(webGet(
+                            "https://www.youtube.com/oembed?format=json&url=" + java.net.URLEncoder.encode(url, "UTF-8"), 100000));
+                    name = o.optString("author_name", null);
+                    String au = o.optString("author_url", "");
+                    if ((m = pHandle.matcher(au)).find()) c.handle = java.net.URLDecoder.decode(m.group(1), "UTF-8");
+                    else if ((m = pId.matcher(au)).find()) c.id = m.group(1);
+                    else if (!au.isEmpty()) pageUrl = au;
+                }
+                if (pageUrl == null) pageUrl = c.pageUrl();
+                String page = "";
+                try {
+                    if (pageUrl != null) page = webGet(pageUrl, 700000);
+                } catch (Exception ignored) {
+                }
+                String ogTitle = metaContent(page, "og:title");
+                image = metaContent(page, "og:image");
+                if (c.id.isEmpty()) {
+                    java.util.regex.Matcher im = java.util.regex.Pattern.compile("\"externalId\":\"(UC[\\w-]{10,})\"").matcher(page);
+                    if (im.find()) c.id = im.group(1);
+                }
+                if (ogTitle != null && !ogTitle.isEmpty()) c.title = ogTitle;
+                else if (name != null && !name.isEmpty()) c.title = name;
+                else if (!c.handle.isEmpty()) c.title = c.handle;
+                else c.title = c.id;
+                if (c.title.isEmpty()) throw new IllegalStateException("Couldn't work out which channel that is");
+            } catch (Exception e) {
+                err = "Couldn't add that channel: " + e.getMessage();
+            }
+            final String fErr = err;
+            final String fImage = image;
+            h.post(() -> {
+                if (fErr != null) {
+                    toast(fErr);
+                    return;
+                }
+                if (fImage != null && !fImage.isEmpty()) prefs.edit().putString("avatar_" + c.avatarKey(), fImage).apply();
+                List<Channel> all = loadChannels();
+                boolean found = false;
+                for (Channel x : all) {
+                    if (x.key().equals(c.key()) || (!c.handle.isEmpty() && c.handle.equalsIgnoreCase(x.handle))) {
+                        x.title = c.title;
+                        if (x.id.isEmpty()) x.id = c.id;
+                        if (x.handle.isEmpty()) x.handle = c.handle;
+                        found = true;
+                    }
+                }
+                if (!found) all.add(c);
+                saveChannels(all);
+                java.util.Set<String> fav = loadFavKeys();
+                fav.add(c.key());
+                saveFavKeys(fav);
+                selectTab(2);
+                toast("Added " + c.title + " to Channels");
+            });
+        });
+    }
+
+    /** Public YouTube page, with the cookie that skips the EU consent screen. */
+    static String webGet(String url, int maxBytes) throws Exception {
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+        conn.setConnectTimeout(6000);
+        conn.setReadTimeout(10000);
+        conn.setRequestProperty("User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+        conn.setRequestProperty("Accept-Language", "en-GB,en;q=0.9");
+        conn.setRequestProperty("Cookie", "SOCS=CAI; CONSENT=YES+1");
+        try (java.io.InputStream in = conn.getInputStream()) {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] b = new byte[16384];
+            int n;
+            while ((n = in.read(b)) > 0 && bo.size() < maxBytes) bo.write(b, 0, n);
+            return bo.toString("UTF-8");
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    static String metaContent(String html, String property) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "<meta property=\"" + java.util.regex.Pattern.quote(property) + "\" content=\"([^\"]*)\"").matcher(html);
+        if (!m.find()) return null;
+        return m.group(1).replace("&amp;", "&").replace("&#39;", "'").replace("&quot;", "\"")
+                .replace("&lt;", "<").replace("&gt;", ">");
     }
 
     void showTakeoutHelp() {

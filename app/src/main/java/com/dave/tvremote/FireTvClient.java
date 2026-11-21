@@ -272,16 +272,6 @@ public class FireTvClient {
         step("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
     }
 
-    /** What the Fire TV says about text-input focus; used to spot when a search box has opened. */
-    private String keyboardState() {
-        try {
-            Resp r = request("GET", base(ip) + "/v1/FireTV/keyboard", null, true, 1200, 1500);
-            return r.code + ":" + r.body;
-        } catch (IOException e) {
-            return "";
-        }
-    }
-
     private void openYouTubeSteps() throws IOException, AuthException {
         step("/v1/FireTV?action=home", null);
         sleep(1200);
@@ -298,39 +288,24 @@ public class FireTvClient {
     }
 
     /**
-     * Gets SmartTube onto its search screen with the box focused, from anywhere (including a playing video).
-     * 1) "@" is SmartTube's own open-search key, in its menus and in its player. If the Fire TV then
-     *    reports a different, steady text-focus state, the search box is up and we're done (~1.5 s).
-     * 2) Otherwise: Back, Back (leaves a playing video; on the menu it only shows "press again to exit",
-     *    and if SmartTube did close, the launch below reopens it), bring SmartTube forward,
-     *    Up to its search button, OK.
+     * SmartTube search box, the way Dave does it by hand: Back, Up, Select, Select.
+     * From a playing video Back leaves the player, Up reaches the search button, the first Select
+     * opens search and the second Select puts the cursor in the search bar.
+     * launchFirst (channel tiles, typed searches) brings SmartTube to the front first.
      */
-    private void openSmartTubeSteps(String chosenPkg) throws IOException, AuthException {
-        String before = keyboardState();
-        try {
-            JSONObject o = new JSONObject();
-            o.put("text", "@");
-            post("/v1/FireTV/text", o.toString());
-        } catch (Exception ignored) {
+    private void openSmartTubeSteps(String chosenPkg, boolean launchFirst) throws IOException, AuthException {
+        if (launchFirst) {
+            launchSmartTube(chosenPkg);
+            sleep(2000);
         }
-        sleep(1000);
-        String after1 = keyboardState();
-        sleep(300);
-        String after2 = keyboardState();
-        if (!after1.isEmpty() && after1.equals(after2) && !after1.equals(before)) return; // search box is up
-
         step("/v1/FireTV?action=back", null);
+        sleep(900);
+        step("/v1/FireTV?action=dpad_up", null);
         sleep(500);
-        step("/v1/FireTV?action=back", null);
-        sleep(700);
-        launchSmartTube(chosenPkg);
-        sleep(2000);
-        for (int i = 0; i < 3; i++) {
-            step("/v1/FireTV?action=dpad_up", null);
-            sleep(250);
-        }
         stepSelect();
-        sleep(1200);
+        sleep(1300);
+        stepSelect();
+        sleep(800);
     }
 
     private void launchSmartTube(String chosenPkg) throws IOException, AuthException {
@@ -356,22 +331,17 @@ public class FireTvClient {
         throw new IllegalStateException("SmartTube wasn't found on the Fire TV. Pick it in ⋮ > SmartTube app.");
     }
 
-    /** Types into whatever box has focus, then presses Enter. Enter's reply is ignored: the TV may error on it. */
+    /** Types into the focused search box, then presses Select to run the search. */
     private void typeAndSubmit(String text) throws IOException, AuthException {
         typeChars(text);
-        sleep(350);
-        try {
-            JSONObject o = new JSONObject();
-            o.put("text", "\n");
-            post("/v1/FireTV/text", o.toString());
-        } catch (Exception ignored) {
-        }
+        sleep(400);
+        stepSelect();
     }
 
     /** Tap on the mic: open the search box, ready for speech. */
     public void openSearch(boolean smartTube, String chosenPkg, Callback<String> done) {
         submitMacro(() -> {
-            if (smartTube) openSmartTubeSteps(chosenPkg);
+            if (smartTube) openSmartTubeSteps(chosenPkg, false);
             else openYouTubeSteps();
         }, done);
     }
@@ -381,7 +351,7 @@ public class FireTvClient {
                            Callback<String> done) {
         submitMacro(() -> {
             if (openFirst) {
-                if (smartTube) openSmartTubeSteps(chosenPkg);
+                if (smartTube) openSmartTubeSteps(chosenPkg, true);
                 else openYouTubeSteps();
             }
             typeAndSubmit(query);
