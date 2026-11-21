@@ -625,6 +625,54 @@ public class MainActivity extends Activity {
     String lastPartial;
     Widgets.CircleButton micBtn;
     TextView voiceBanner;
+    int sessionEngine;
+    final Runnable voiceWatchdog = this::voiceGaveUp;
+
+    /** Speech engines on this phone: each installed recognition service, Google's first, plus on-device. */
+    List<android.content.ComponentName> voiceEngines() {
+        List<android.content.ComponentName> list = new ArrayList<>();
+        try {
+            List<android.content.pm.ResolveInfo> found = getPackageManager().queryIntentServices(
+                    new android.content.Intent(android.speech.RecognitionService.SERVICE_INTERFACE), 0);
+            for (android.content.pm.ResolveInfo ri : found) {
+                android.content.ComponentName cn = new android.content.ComponentName(
+                        ri.serviceInfo.packageName, ri.serviceInfo.name);
+                if (ri.serviceInfo.packageName.startsWith("com.google")) list.add(0, cn);
+                else list.add(cn);
+            }
+        } catch (Exception ignored) {
+        }
+        list.add(null); // phone's default engine
+        if (Build.VERSION.SDK_INT >= 31) {
+            list.add(new android.content.ComponentName("on-device", "on-device"));
+        }
+        return list;
+    }
+
+    int voiceEngineIndex() {
+        int n = voiceEngines().size();
+        return Math.floorMod(prefs.getInt("voiceEngine", 0), n);
+    }
+
+    String voiceEngineName(int idx) {
+        android.content.ComponentName cn = voiceEngines().get(idx);
+        if (cn == null) return "Phone default";
+        String pkg = cn.getPackageName();
+        if (pkg.equals("on-device")) return "On-device";
+        if (pkg.equals("com.google.android.googlequicksearchbox")) return "Google app";
+        if (pkg.equals("com.google.android.tts")) return "Google speech services";
+        if (pkg.contains("vivo")) return "vivo (" + pkg + ")";
+        return pkg;
+    }
+
+    android.speech.SpeechRecognizer makeRecognizer(int idx) {
+        android.content.ComponentName cn = voiceEngines().get(idx);
+        if (cn == null) return android.speech.SpeechRecognizer.createSpeechRecognizer(this);
+        if ("on-device".equals(cn.getPackageName()) && Build.VERSION.SDK_INT >= 31) {
+            return android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
+        }
+        return android.speech.SpeechRecognizer.createSpeechRecognizer(this, cn);
+    }
 
     /** Mic pressed: start listening straight away. */
     void voiceDown() {
@@ -635,22 +683,30 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
             return;
         }
-        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
-            askYouTubeTyped(); // no speech service on the phone: type it instead
-            return;
+        // fresh recogniser every time; reusing one is what causes "busy" / client errors
+        if (recognizer != null) {
+            try {
+                recognizer.destroy();
+            } catch (Exception ignored) {
+            }
+            recognizer = null;
         }
-        if (recognizer == null) {
-            recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
+        h.removeCallbacks(voiceWatchdog);
+        sessionEngine = voiceEngineIndex();
+        try {
+            recognizer = makeRecognizer(sessionEngine);
             recognizer.setRecognitionListener(voiceListener);
+        } catch (Exception e) {
+            nextVoiceEngine("couldn't start");
+            return;
         }
         android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                android.speech.RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH);
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-GB");
         i.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
-        // keep listening while the button is held, even through short pauses
         i.putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000);
         i.putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000);
         lastPartial = null;
@@ -662,12 +718,13 @@ public class MainActivity extends Activity {
         try {
             recognizer.startListening(i);
         } catch (Exception e) {
+            listening = false;
             endVoiceUi();
-            toast("Couldn't start the microphone");
+            nextVoiceEngine("couldn't start");
         }
     }
 
-    /** Mic released: stop listening; the result arrives a moment later and runs the search. */
+    /** Mic released: stop listening; the result should arrive within a moment. */
     void voiceUp() {
         micHeld = false;
         if (!listening || recognizer == null) return;
@@ -676,6 +733,33 @@ public class MainActivity extends Activity {
             recognizer.stopListening();
         } catch (Exception ignored) {
         }
+        h.removeCallbacks(voiceWatchdog);
+        h.postDelayed(voiceWatchdog, 3500); // never sit on "Working it out…"
+    }
+
+    /** No final result came back in time: use what was heard, or give up cleanly. */
+    void voiceGaveUp() {
+        if (voiceHandled) return;
+        voiceHandled = true;
+        listening = false;
+        try {
+            if (recognizer != null) recognizer.cancel();
+        } catch (Exception ignored) {
+        }
+        endVoiceUi();
+        if (lastPartial != null && !lastPartial.isEmpty()) {
+            runYouTubeSearch(lastPartial);
+        } else {
+            nextVoiceEngine("gave no answer");
+        }
+    }
+
+    /** Move to the next speech engine after one fails, so the next press tries something else. */
+    void nextVoiceEngine(String why) {
+        String failed = voiceEngineName(sessionEngine);
+        prefs.edit().putInt("voiceEngine", sessionEngine + 1).apply();
+        toast(failed + " " + why + ". Switched to " + voiceEngineName(voiceEngineIndex())
+                + ": hold the mic and try again.");
     }
 
     final android.speech.RecognitionListener voiceListener = new android.speech.RecognitionListener() {
@@ -702,33 +786,31 @@ public class MainActivity extends Activity {
         @Override
         public void onError(int error) {
             listening = false;
-            if (!voiceHandled && lastPartial != null && !lastPartial.isEmpty()) {
-                voiceHandled = true;
-                endVoiceUi();
+            h.removeCallbacks(voiceWatchdog);
+            if (voiceHandled) return;
+            voiceHandled = true;
+            endVoiceUi();
+            if (lastPartial != null && !lastPartial.isEmpty()) {
                 runYouTubeSearch(lastPartial);
                 return;
             }
-            endVoiceUi();
             if (error == android.speech.SpeechRecognizer.ERROR_NO_MATCH
                     || error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                toast("Didn't catch that. Hold the mic and speak, then let go.");
+                toast("Didn't catch that. Hold the mic, speak, then let go.");
             } else if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                 toast("Microphone permission is needed for voice search");
             } else if (error == android.speech.SpeechRecognizer.ERROR_NETWORK
                     || error == android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
                 toast("Voice needs an internet connection");
             } else {
-                toast("Voice search error (" + error + "). Try again.");
-                if (recognizer != null) {
-                    recognizer.destroy();
-                    recognizer = null;
-                }
+                nextVoiceEngine("failed (error " + error + ")");
             }
         }
 
         @Override
         public void onResults(Bundle results) {
             listening = false;
+            h.removeCallbacks(voiceWatchdog);
             java.util.ArrayList<String> r =
                     results.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
             String text = (r != null && !r.isEmpty()) ? r.get(0).trim() : null;
@@ -737,7 +819,7 @@ public class MainActivity extends Activity {
             if (voiceHandled) return;
             voiceHandled = true;
             if (text == null || text.isEmpty()) {
-                toast("Didn't catch that. Hold the mic and speak, then let go.");
+                toast("Didn't catch that. Hold the mic, speak, then let go.");
             } else {
                 runYouTubeSearch(text);
             }
@@ -804,35 +886,44 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    /** SmartTube package to use for voice search, or null to use the YouTube app. */
-    String smartTubePackage() {
-        if (!prefs.getBoolean("useSmartTube", true)) return null;
+    /** SmartTube package names to try, best guess first. */
+    String[] smartTubeCandidates() {
+        List<String> out = new ArrayList<>();
+        String saved = prefs.getString("smartTubePkg", null);
+        if (saved != null) out.add(saved);
         if (apps != null) {
-            for (String pkg : FireTvClient.SMARTTUBE) {
-                for (FireTvClient.App a : apps) {
-                    if (pkg.equals(a.id)) {
-                        prefs.edit().putString("smartTubePkg", pkg).apply();
-                        return pkg;
-                    }
-                }
-            }
             for (FireTvClient.App a : apps) {
-                if (a.name != null && a.name.toLowerCase().contains("smarttube")) {
-                    prefs.edit().putString("smartTubePkg", a.id).apply();
-                    return a.id;
+                boolean known = false;
+                for (String k : FireTvClient.SMARTTUBE) if (k.equals(a.id)) known = true;
+                if ((known || (a.name != null && a.name.toLowerCase().contains("smarttube"))) && !out.contains(a.id)) {
+                    out.add(0, a.id);
                 }
             }
         }
-        return prefs.getString("smartTubePkg", null);
+        for (String k : FireTvClient.SMARTTUBE) if (!out.contains(k)) out.add(k);
+        return out.toArray(new String[0]);
     }
 
     void runYouTubeSearch(String q) {
-        String st = smartTubePackage();
-        String appName = st != null ? "SmartTube" : "YouTube";
-        Toast.makeText(this, "Searching " + appName + " for \"" + q + "\"…", Toast.LENGTH_LONG).show();
-        Runnable done = () -> toast("Searched " + appName + " for \"" + q + "\"");
-        if (st != null) ftv.smartTubeSearch(st, q, done);
-        else ftv.youtubeSearch(q, done);
+        if (prefs.getBoolean("useSmartTube", true)) {
+            Toast.makeText(this, "Searching SmartTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
+            ftv.smartTubeSearch(smartTubeCandidates(), q, (pkg, err) -> {
+                if (pkg != null) {
+                    prefs.edit().putString("smartTubePkg", pkg).apply();
+                    toast("Searched SmartTube for \"" + q + "\"");
+                } else {
+                    new AlertDialog.Builder(this, R.style.DialogTheme)
+                            .setTitle("SmartTube not found")
+                            .setMessage(err + ". Open SmartTube on the TV once, then try again. "
+                                    + "You can switch voice search to the YouTube app in the ⋮ menu.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                }
+            });
+        } else {
+            Toast.makeText(this, "Searching YouTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
+            ftv.youtubeSearch(q, () -> toast("Searched YouTube for \"" + q + "\""));
+        }
     }
 
     void inputPressed() {
@@ -997,9 +1088,9 @@ public class MainActivity extends Activity {
                 "Phone volume buttons change TV volume: " + (volKeys ? "On" : "Off"),
                 "TV IR codes: " + (ir.getCodeSet() == 0 ? "Set A" : "Set B") + "  (tap to test/change)",
                 "IR blaster: " + (ir.available() ? "found" : "NOT found"),
-                "Voice search app: " + (prefs.getBoolean("useSmartTube", true)
-                        ? "SmartTube" + (smartTubePackage() == null ? " (not found on Fire TV yet)" : "")
-                        : "YouTube"),
+                "Voice search app: " + (prefs.getBoolean("useSmartTube", true) ? "SmartTube" : "YouTube")
+                        + "  (tap to switch)",
+                "Voice engine: " + voiceEngineName(voiceEngineIndex()) + "  (tap to change)",
                 "Type a search instead of speaking…",
         };
         new AlertDialog.Builder(this, R.style.DialogTheme)
@@ -1026,6 +1117,10 @@ public class MainActivity extends Activity {
                             prefs.edit().putBoolean("useSmartTube", !prefs.getBoolean("useSmartTube", true)).apply();
                             break;
                         case 7:
+                            prefs.edit().putInt("voiceEngine", voiceEngineIndex() + 1).apply();
+                            toast("Voice engine: " + voiceEngineName(voiceEngineIndex()));
+                            break;
+                        case 8:
                             if (checkPaired()) askYouTubeTyped();
                             break;
                         default:

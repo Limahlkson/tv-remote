@@ -230,9 +230,44 @@ public class FireTvClient {
      * SmartTube: bring it to the front (it resumes where it was, no Home press), jump to Search
      * at the top of its side menu, type the words, then press Enter to run the search.
      */
-    public void smartTubeSearch(String pkg, String query, Runnable onTyped) {
+    public void smartTubeSearch(String[] packages, String query, Callback<String> done) {
         submit(() -> {
-            post("/v1/FireTV/app/" + pkg, null);
+            // Ask the Fire TV which SmartTube it actually has, so we never open the wrong app
+            List<String> order = new ArrayList<>();
+            try {
+                Resp list = request("GET", base(ip) + "/v1/FireTV/appsV2", null, true, 1500, 5000);
+                JSONArray arr = new JSONArray(list.body);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    String id = o.optString("appId", "");
+                    String name = o.optString("name", "").toLowerCase();
+                    boolean known = false;
+                    for (String k : SMARTTUBE) if (k.equals(id)) known = true;
+                    if (!id.isEmpty() && (known || name.contains("smarttube") || name.contains("smart tube"))) {
+                        order.add(id);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            for (String p : packages) if (!order.contains(p)) order.add(p);
+            String used = null;
+            for (String pkg : order) {
+                Resp r = request("POST", base(ip) + "/v1/FireTV/app/" + pkg, "", true, 1500, 4000);
+                if (r.code == 401 || r.code == 403) throw new AuthException(r.body);
+                String desc = "";
+                try {
+                    desc = new JSONObject(r.body).optString("description", "");
+                } catch (Exception ignored) {
+                }
+                if (r.code >= 200 && r.code < 300 && !desc.toLowerCase().contains("not")) {
+                    used = pkg;
+                    break;
+                }
+            }
+            if (used == null) {
+                main.post(() -> done.done(null, "SmartTube isn't installed on this Fire TV (or uses a name I don't know)"));
+                return;
+            }
             sleep(3000);                               // quick if already open, allows a cold start
             post("/v1/FireTV?action=dpad_left", null); // into the side menu
             sleep(600);
@@ -247,7 +282,8 @@ public class FireTvClient {
             typeChars(query);
             sleep(500);
             typeChars("\n");                          // Enter runs the search in SmartTube
-            if (onTyped != null) main.post(onTyped);
+            final String fUsed = used;
+            main.post(() -> done.done(fUsed, null));
         });
     }
 
