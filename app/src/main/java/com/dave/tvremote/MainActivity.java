@@ -92,6 +92,7 @@ public class MainActivity extends Activity {
         ftv.configure(prefs.getString("ip", null), prefs.getString("token", null), prefs.getString("mac", null));
         ftv.setListener(this::onFireTvStatus);
         yt = new YouTubeAccount(prefs);
+        adb = new AdbClient(prefs);
         voice = new VoiceEngine();
         voice.prepare(this, 2); // bump when the bundled model changes
 
@@ -745,6 +746,18 @@ public class MainActivity extends Activity {
 
     /** Spoken words: type them into the search box that's already open, then Select to search. */
     void sendSpokenSearch(String q) {
+        if (adbReady() && searchUsesSmartTube()) {
+            showVoiceBanner("Searching:  “" + q + "”");
+            h.postDelayed(this::endVoiceUi, 2500);
+            openOnTv(resultsUrl(q), "Searching SmartTube…", () -> {
+                showVoiceBanner("Typing on TV:  “" + q + "”");
+                ftv.typeSearch(q, false, true, smartTubePackage(), (ok, err) -> {
+                    h.postDelayed(this::endVoiceUi, 2500);
+                    if (err != null) searchError(err);
+                });
+            });
+            return;
+        }
         showVoiceBanner("Typing on TV:  “" + q + "”");
         ftv.typeSearch(q, false, searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
             h.postDelayed(this::endVoiceUi, 2500);
@@ -884,8 +897,20 @@ public class MainActivity extends Activity {
     }
 
     /** Typed search or a channel tile: open the search box, type, search. */
+    static String resultsUrl(String q) {
+        try {
+            return "https://www.youtube.com/results?search_query=" + java.net.URLEncoder.encode(q, "UTF-8");
+        } catch (Exception e) {
+            return "https://www.youtube.com/results?search_query=" + q.replace(' ', '+');
+        }
+    }
+
     void runYouTubeSearch(String q) {
         if (!checkPaired()) return;
+        if (adbReady() && searchUsesSmartTube()) {
+            openOnTv(resultsUrl(q), "Searching SmartTube for \"" + q + "\"…", null);
+            return;
+        }
         toast("Searching " + (searchUsesSmartTube() ? "SmartTube" : "YouTube") + " for \"" + q + "\"…");
         ftv.typeSearch(q, true, searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
             if (err != null) searchError(err);
@@ -1079,7 +1104,102 @@ public class MainActivity extends Activity {
 
     void openChannel(Channel c) {
         if (!checkPaired()) return;
+        String url = c.pageUrl();
+        if (url == null) {
+            runYouTubeSearch(c.title); // added by name only: nothing to link to
+            return;
+        }
+        if (adbReady()) {
+            openOnTv(url, "Opening " + c.title + "…", () -> runYouTubeSearch(c.title));
+            return;
+        }
+        if (!prefs.getBoolean("adbAsked", false)) {
+            new AlertDialog.Builder(this, R.style.DialogTheme)
+                    .setTitle("Open channels directly?")
+                    .setMessage("To jump straight to " + c.title + "'s channel in SmartTube, the app needs the "
+                            + "Fire TV's developer connection (ADB) switched on. It's a one-off, about a minute.\n\n"
+                            + "Without it, the tile searches SmartTube for the channel instead.")
+                    .setPositiveButton("Set it up", (d, w) -> showAdbSetup())
+                    .setNegativeButton("Just search", (d, w) -> {
+                        prefs.edit().putBoolean("adbAsked", true).apply();
+                        runYouTubeSearch(c.title);
+                    })
+                    .show();
+            return;
+        }
         runYouTubeSearch(c.title);
+    }
+
+    // ---- ADB: hand the Fire TV a link (channel page, search results) ---------------------
+
+    AdbClient adb;
+
+    boolean adbReady() {
+        return prefs.getBoolean("adbOk", false) && ftv.getIp() != null;
+    }
+
+    static String shellQuote(String s) {
+        return "'" + s.replace("'", "'\\''") + "'";
+    }
+
+    /** Opens a YouTube link in SmartTube on the TV; runs fallback if ADB can't do it. */
+    void openOnTv(String url, String status, Runnable fallback) {
+        toast(status);
+        String pkg = smartTubePackage();
+        String find = pkg != null ? "p=" + shellQuote(pkg) + "; "
+                : "p=$(pm list packages | grep -i -E 'smarttube|videomanager' | head -n 1 | cut -d: -f2); ";
+        String cmd = find + "am start -a android.intent.action.VIEW -d " + shellQuote(url) + " -p \"$p\"";
+        adb.shell(ftv.getIp(), cmd, () -> showVoiceBanner("On the TV: tick Always allow, then OK (use the trackpad)"),
+                (out, err) -> {
+                    endVoiceUi();
+                    boolean failed = err != null || out == null || out.contains("Error") || out.contains("Exception");
+                    if (!failed) return;
+                    toast(err != null ? err : "SmartTube couldn't open that link, searching instead");
+                    if (fallback != null) fallback.run();
+                });
+    }
+
+    void showAdbSetup() {
+        if (!checkPaired()) return;
+        prefs.edit().putBoolean("adbAsked", true).apply();
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Fire TV developer connection")
+                .setMessage("One-off, on the TV:\n\n"
+                        + "1. Settings > My Fire TV > About. Select your Fire TV's name and press OK 7 times "
+                        + "until it says you're a developer.\n"
+                        + "2. Back, then My Fire TV > Developer options > turn ADB debugging ON.\n"
+                        + "3. Tap Connect. The TV asks \"Allow USB debugging?\": tick Always allow and press OK "
+                        + "(the trackpad here works for that).\n\n"
+                        + "Then channel tiles open the channel itself, and voice search goes straight to results.")
+                .setPositiveButton("Connect", (d, w) -> testAdb())
+                .setNeutralButton(prefs.getBoolean("adbOk", false) ? "Turn off" : "Later", (d, w) -> {
+                    if (prefs.getBoolean("adbOk", false)) {
+                        prefs.edit().putBoolean("adbOk", false).apply();
+                        toast("Direct links off");
+                    }
+                })
+                .show();
+    }
+
+    void testAdb() {
+        showVoiceBanner("Connecting to the Fire TV…");
+        adb.shell(ftv.getIp(), "echo tvremote-ok",
+                () -> showVoiceBanner("On the TV: tick Always allow, then OK (use the trackpad)"),
+                (out, err) -> {
+                    endVoiceUi();
+                    if (out != null && out.contains("tvremote-ok")) {
+                        prefs.edit().putBoolean("adbOk", true).apply();
+                        toast("Connected. Channel tiles now open the channel directly.");
+                    } else {
+                        prefs.edit().putBoolean("adbOk", false).apply();
+                        new AlertDialog.Builder(this, R.style.DialogTheme)
+                                .setTitle("Couldn't connect")
+                                .setMessage(err == null ? "No answer from the Fire TV." : err)
+                                .setPositiveButton("Try again", (d, w) -> testAdb())
+                                .setNegativeButton("Close", null)
+                                .show();
+                    }
+                });
     }
 
     final java.util.concurrent.ExecutorService avatarExec = java.util.concurrent.Executors.newFixedThreadPool(2);
@@ -1888,6 +2008,7 @@ public class MainActivity extends Activity {
                 "Voice: " + voiceStatus(),
                 "Type a search instead of speaking…",
                 "YouTube channels (same as holding Channels)…",
+                "Direct links to channels (ADB): " + (prefs.getBoolean("adbOk", false) ? "On" : "Off") + "  (tap to set up)",
         };
         new AlertDialog.Builder(this, R.style.DialogTheme)
                 .setTitle("Remote settings")
@@ -1920,6 +2041,9 @@ public class MainActivity extends Activity {
                             break;
                         case 10:
                             showChannelManager();
+                            break;
+                        case 11:
+                            showAdbSetup();
                             break;
                         default:
                             break;
