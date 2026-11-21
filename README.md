@@ -21,6 +21,17 @@ Built for a vivo iQOO 12 Pro (has an IR blaster), Android 16.
 - Pressing **Input/AV** switches the pad into *TV menu mode* for 12 s (amber), so swipes, taps and
   Back go to the TV by IR to pick the source. Tap the banner or Home to leave.
 - Phone volume buttons change the TV volume by IR while the app is open (can be turned off).
+- **Voice search (red mic under Mute):** hold, talk, let go. Speech-to-text is offline inside the app
+  (Vosk, `vosk-model-small-en-us-0.15`, downloaded and checksum-checked by CI into
+  `app/src/main/assets/vosk-model-en`, unpacked to app storage on first run). The phone's own speech
+  service is not used: on Dave's vivo it returned client errors (5).
+- **SmartTube search:** launches SmartTube (package from ⋮ > SmartTube app, else detected in
+  `/v1/FireTV/appsV2`, else known names), `dpad_left`, `dpad_up` x12 to reach the Leanback title search
+  orb, select, types via `/v1/FireTV/text`, then `\n` to submit. Multi-step sequences wake the stick once,
+  then retry each step individually (`submitMacro`).
+- **Channels tab:** hold 5 s to tick favourite YouTube channels. Subscriptions come from a Google Takeout
+  zip / subscriptions.csv (or added by name). Tapping a channel tile runs the SmartTube search for its name.
+  Avatars are scraped best-effort from the public channel page (og:image).
 
 ## Build
 
@@ -33,4 +44,5 @@ Layout: `app/src/main/java/com/dave/tvremote/`
 - `FireTvClient.java` – Fire TV API, wake, pairing, apps list
 - `IrRemote.java` – Hisense IR codes and NEC encoding
 - `Discovery.java` – SSDP scan for Fire TVs
+- `VoiceEngine.java` – offline hold-to-talk speech recognition
 - `Widgets.java`, `Icons.java` – custom drawn controls
