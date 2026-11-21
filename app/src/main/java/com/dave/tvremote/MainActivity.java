@@ -92,7 +92,7 @@ public class MainActivity extends Activity {
         ftv.configure(prefs.getString("ip", null), prefs.getString("token", null), prefs.getString("mac", null));
         ftv.setListener(this::onFireTvStatus);
         voice = new VoiceEngine();
-        voice.prepare(this, appVersion());
+        voice.prepare(this, 2); // bump when the bundled model changes
 
         getWindow().setStatusBarColor(PAGE);
         getWindow().setNavigationBarColor(CARD);

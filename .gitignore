@@ -4,3 +4,6 @@ local.properties
 *.iml
 .idea/
 out/
+
+app/src/main/assets/vosk-model-en/
+model.zip
