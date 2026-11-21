@@ -220,6 +220,50 @@ public class FireTvClient {
         });
     }
 
+    /** Known SmartTube package names, newest first. */
+    public static final String[] SMARTTUBE = {
+            "org.smarttube.stable", "org.smarttube.beta", "app.smarttube.fdroid", "app.smarttube",
+            "com.teamsmart.videomanager.tv", "com.liskovsoft.smarttubetv.beta", "com.liskovsoft.smarttubetv"
+    };
+
+    /**
+     * SmartTube: bring it to the front (it resumes where it was, no Home press), jump to Search
+     * at the top of its side menu, type the words, then press Enter to run the search.
+     */
+    public void smartTubeSearch(String pkg, String query, Runnable onTyped) {
+        submit(() -> {
+            post("/v1/FireTV/app/" + pkg, null);
+            sleep(3000);                               // quick if already open, allows a cold start
+            post("/v1/FireTV?action=dpad_left", null); // into the side menu
+            sleep(600);
+            for (int i = 0; i < 10; i++) {             // Search sits at the top
+                post("/v1/FireTV?action=dpad_up", null);
+                sleep(220);
+            }
+            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyDown\"}");
+            sleep(150);
+            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
+            sleep(1500);
+            typeChars(query);
+            sleep(500);
+            typeChars("\n");                          // Enter runs the search in SmartTube
+            if (onTyped != null) main.post(onTyped);
+        });
+    }
+
+    private void typeChars(String text) throws IOException, AuthException {
+        for (int i = 0; i < text.length(); ) {
+            int cp = text.codePointAt(i);
+            i += Character.charCount(cp);
+            JSONObject o = new JSONObject();
+            try {
+                o.put("text", new String(Character.toChars(cp)));
+            } catch (Exception ignored) {
+            }
+            post("/v1/FireTV/text", o.toString());
+        }
+    }
+
     public void launchApp(String pkg) {
         submit(() -> post("/v1/FireTV/app/" + pkg, null));
     }

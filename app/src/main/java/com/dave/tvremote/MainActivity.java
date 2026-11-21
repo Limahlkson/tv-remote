@@ -649,9 +649,35 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    /** SmartTube package to use for voice search, or null to use the YouTube app. */
+    String smartTubePackage() {
+        if (!prefs.getBoolean("useSmartTube", true)) return null;
+        if (apps != null) {
+            for (String pkg : FireTvClient.SMARTTUBE) {
+                for (FireTvClient.App a : apps) {
+                    if (pkg.equals(a.id)) {
+                        prefs.edit().putString("smartTubePkg", pkg).apply();
+                        return pkg;
+                    }
+                }
+            }
+            for (FireTvClient.App a : apps) {
+                if (a.name != null && a.name.toLowerCase().contains("smarttube")) {
+                    prefs.edit().putString("smartTubePkg", a.id).apply();
+                    return a.id;
+                }
+            }
+        }
+        return prefs.getString("smartTubePkg", null);
+    }
+
     void runYouTubeSearch(String q) {
-        Toast.makeText(this, "Searching YouTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
-        ftv.youtubeSearch(q, () -> toast("Typed \"" + q + "\" into YouTube search"));
+        String st = smartTubePackage();
+        String appName = st != null ? "SmartTube" : "YouTube";
+        Toast.makeText(this, "Searching " + appName + " for \"" + q + "\"…", Toast.LENGTH_LONG).show();
+        Runnable done = () -> toast("Searched " + appName + " for \"" + q + "\"");
+        if (st != null) ftv.smartTubeSearch(st, q, done);
+        else ftv.youtubeSearch(q, done);
     }
 
     void inputPressed() {
@@ -816,6 +842,9 @@ public class MainActivity extends Activity {
                 "Phone volume buttons change TV volume: " + (volKeys ? "On" : "Off"),
                 "TV IR codes: " + (ir.getCodeSet() == 0 ? "Set A" : "Set B") + "  (tap to test/change)",
                 "IR blaster: " + (ir.available() ? "found" : "NOT found"),
+                "Voice search app: " + (prefs.getBoolean("useSmartTube", true)
+                        ? "SmartTube" + (smartTubePackage() == null ? " (not found on Fire TV yet)" : "")
+                        : "YouTube"),
         };
         new AlertDialog.Builder(this, R.style.DialogTheme)
                 .setTitle("Remote settings")
@@ -836,6 +865,9 @@ public class MainActivity extends Activity {
                             break;
                         case 4:
                             showIrSetPicker();
+                            break;
+                        case 6:
+                            prefs.edit().putBoolean("useSmartTube", !prefs.getBoolean("useSmartTube", true)).apply();
                             break;
                         default:
                             break;
