@@ -733,11 +733,6 @@ public class MainActivity extends Activity {
     /** Tap: put the TV on the search box, ready for speech. */
     void tapOpenSearch() {
         if (!checkPaired()) return;
-        if (adbReady() && searchUsesSmartTube()) {
-            // direct link: SmartTube opens Search with the cursor in the box (no key presses, picker auto-closed)
-            openOnTv("https://www.youtube.com/tv?launch=voice", "Opening search…");
-            return;
-        }
         String app = searchUsesSmartTube() ? "SmartTube" : "YouTube";
         toast("Opening " + app + " search…");
         ftv.openSearch(searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
