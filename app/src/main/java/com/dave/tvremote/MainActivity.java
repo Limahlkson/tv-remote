@@ -2165,14 +2165,18 @@ public class MainActivity extends Activity {
         String cmd = "f=$(dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'); "
                 + "case \"$f\" in *PlaybackActivity*) ;; *) echo NOVIDEO; exit;; esac; "
                 + "input keyevent 20; sleep 0.25; "                  // bring up the player controls
-                + "input keyevent" + keys + rights + " 19 19 23; "  // one burst: reset left, right, up, up, OK
-                + "echo DONE";
+                + "input keyevent" + keys + rights + " 19 19; "  // one burst: reset left, right, up, up
+                + "sleep 0.2; echo DONE";
         showVoiceBanner("Opening comments…");
         adb.shell(ftv.getIp(), cmd, null, (out, err) -> {
             if (err != null) failed(err);
             else if (out != null && out.contains("NOVIDEO")) failed("play a video in SmartTube first");
             else if (out == null || !out.contains("DONE")) failed("comments didn't open");
-            else endVoiceUi();
+            else {
+                // the final OK goes through the Fire TV remote connection, like a real remote press
+                ftv.keyed("select");
+                endVoiceUi();
+            }
         });
     }
 
