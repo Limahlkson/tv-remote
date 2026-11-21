@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
 
     static final int PAGE = 0xFF000000, CARD = 0xFF2B2B2B, BTN = 0xFF3A3A3A, PAD = 0xFF1B1B1B,
             BLUE = 0xFF4DA3FF, ORANGE = 0xFFFF5500, RED = 0xFFD32F2F, TEXT = 0xFFE8E8E8,
-            DIM = 0xFF9A9A9A, AMBER = 0xFFFFB300, TV_PAD = 0xFF2A2210;
+            DIM = 0xFF9A9A9A, AMBER = 0xFFFFB300, TV_PAD = 0xFF2A2210, GREEN = 0xFF2E7D32;
 
     static final String[] DIRS = {"dpad_up", "dpad_down", "dpad_left", "dpad_right"};
     static final int[] IR_DIRS = {IrRemote.UP, IrRemote.DOWN, IrRemote.LEFT, IrRemote.RIGHT};
@@ -64,8 +64,8 @@ public class MainActivity extends Activity {
     Vibrator vibrator;
     final Handler h = new Handler(Looper.getMainLooper());
 
-    TextView title, banner;
-    View statusDot;
+    TextView title, statusBar, doneBtn;
+    View statusDot, titleRowView;
     FrameLayout padArea;
     Widgets.TouchPad trackpad;
     Widgets.Dpad dpad;
@@ -198,6 +198,41 @@ public class MainActivity extends Activity {
         tlp.leftMargin = dp(56);
         tlp.rightMargin = dp(56);
         header.addView(titleRow, tlp);
+        titleRowView = titleRow;
+
+        // Status bar: sits over the Fire TV name so nothing below it moves when it shows
+        statusBar = new TextView(this);
+        statusBar.setTextColor(0xFFFFFFFF);
+        statusBar.setGravity(Gravity.CENTER);
+        statusBar.setMaxLines(2);
+        statusBar.setEllipsize(TextUtils.TruncateAt.END);
+        statusBar.setPadding(dp(10), 0, dp(10), 0);
+        statusBar.setAutoSizeTextTypeUniformWithConfiguration(10, 15, 1, TypedValue.COMPLEX_UNIT_SP);
+        GradientDrawable sbg = new GradientDrawable();
+        sbg.setColor(GREEN);
+        sbg.setCornerRadius(dp(12));
+        statusBar.setBackground(sbg);
+        statusBar.setVisibility(View.GONE);
+        statusBar.setOnClickListener(v -> statusTapped());
+        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(-1, dp(38), Gravity.CENTER);
+        slp.leftMargin = dp(46);
+        slp.rightMargin = dp(46);
+        header.addView(statusBar, slp);
+
+        // Done button for tile edit mode, also over the name
+        doneBtn = new TextView(this);
+        doneBtn.setText("Done");
+        doneBtn.setTextColor(0xFFFFFFFF);
+        doneBtn.setTypeface(null, Typeface.BOLD);
+        doneBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        doneBtn.setGravity(Gravity.CENTER);
+        GradientDrawable dbg = new GradientDrawable();
+        dbg.setColor(BLUE);
+        dbg.setCornerRadius(dp(19));
+        doneBtn.setBackground(dbg);
+        doneBtn.setVisibility(View.GONE);
+        doneBtn.setOnClickListener(v -> stopEditMode(true));
+        header.addView(doneBtn, new FrameLayout.LayoutParams(dp(120), dp(38), Gravity.CENTER));
 
         Widgets.CircleButton more = new Widgets.CircleButton(this, Icons.MORE, 0, TEXT).iconScale(0.5f)
                 .action(this::showSettings, false);
@@ -235,37 +270,6 @@ public class MainActivity extends Activity {
         drLp.bottomMargin = dp(4);
         card.addView(drawer, drLp);
         selectTab(prefs.getInt("tab", 1));
-
-        // TV-menu banner (shown after Input)
-        banner = new TextView(this);
-        banner.setText("TV menu mode: swipe and tap go to the TV.  Tap here when done.");
-        banner.setTextColor(0xFF000000);
-        banner.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        banner.setGravity(Gravity.CENTER);
-        banner.setPadding(dp(10), dp(8), dp(10), dp(8));
-        GradientDrawable bb = new GradientDrawable();
-        bb.setColor(AMBER);
-        bb.setCornerRadius(dp(12));
-        banner.setBackground(bb);
-        banner.setVisibility(View.GONE);
-        banner.setOnClickListener(v -> setTvMode(false));
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
-        blp.bottomMargin = dp(6);
-        card.addView(banner, blp);
-
-        voiceBanner = new TextView(this);
-        voiceBanner.setTextColor(0xFFFFFFFF);
-        voiceBanner.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        voiceBanner.setGravity(Gravity.CENTER);
-        voiceBanner.setPadding(dp(10), dp(8), dp(10), dp(8));
-        GradientDrawable vb = new GradientDrawable();
-        vb.setColor(0xFF2E7D32);
-        vb.setCornerRadius(dp(12));
-        voiceBanner.setBackground(vb);
-        voiceBanner.setVisibility(View.GONE);
-        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(-1, -2);
-        vlp.bottomMargin = dp(6);
-        card.addView(voiceBanner, vlp);
 
         // pad area with notched corner buttons
         padArea = new FrameLayout(this);
@@ -341,6 +345,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(-1, 0, 1f);
         padLp.topMargin = dp(14);
         card.addView(padArea, padLp);
+        if (prefs.getBoolean("mirrored", false)) mirrorPadButtons();
 
         // TV volume and channel rockers (infrared)
         LinearLayout rockers = new LinearLayout(this);
@@ -352,6 +357,12 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, -1, 1f);
         rlp.setMargins(dp(4), 0, dp(4), 0);
         rockers.addView(ch, rlp);
+        // swap the pad's buttons between the left and right sides
+        Widgets.CircleButton swap = new Widgets.CircleButton(this, Icons.SWAP, BTN, TEXT).iconScale(0.42f)
+                .action(this::toggleMirror, false);
+        LinearLayout.LayoutParams swLp = new LinearLayout.LayoutParams(dp(44), dp(44));
+        swLp.setMargins(dp(2), 0, dp(2), 0);
+        rockers.addView(swap, swLp);
         LinearLayout.LayoutParams rlp2 = new LinearLayout.LayoutParams(0, -1, 1f);
         rlp2.setMargins(dp(4), 0, dp(4), 0);
         rockers.addView(vol, rlp2);
@@ -396,6 +407,36 @@ public class MainActivity extends Activity {
         return col;
     }
 
+    /** Swap button: everything on the right of the pad goes to the left, and the other way round. */
+    void toggleMirror() {
+        buzz();
+        boolean now = !prefs.getBoolean("mirrored", false);
+        prefs.edit().putBoolean("mirrored", now).apply();
+        mirrorPadButtons();
+    }
+
+    /** Flips each pad button's side and side margins. Doing it twice puts everything back. */
+    void mirrorPadButtons() {
+        for (int i = 0; i < padArea.getChildCount(); i++) {
+            View v = padArea.getChildAt(i);
+            if (v == trackpad || v == dpad) continue;
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
+            int g = lp.gravity;
+            int hor = g & Gravity.RELATIVE_HORIZONTAL_GRAVITY_MASK;
+            int vert = g & ~Gravity.RELATIVE_HORIZONTAL_GRAVITY_MASK;
+            if (hor == Gravity.START) hor = Gravity.END;
+            else if (hor == Gravity.END) hor = Gravity.START;
+            else if (hor == Gravity.LEFT) hor = Gravity.RIGHT;
+            else if (hor == Gravity.RIGHT) hor = Gravity.LEFT;
+            lp.gravity = vert | hor;
+            int s = lp.getMarginStart(), e = lp.getMarginEnd();
+            lp.setMarginStart(e);
+            lp.setMarginEnd(s);
+            v.setLayoutParams(lp);
+        }
+        padArea.requestLayout();
+    }
+
     FrameLayout.LayoutParams cornerLp(int size, int gravity) {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(size, size, gravity);
         int off = -dp(10);
@@ -434,6 +475,7 @@ public class MainActivity extends Activity {
             }
         }
         tabContent.removeAllViews();
+        tileLooks.clear();
         if (i == 0) {
             tabContent.addView(new PillButton(this, Icons.REWIND, () -> scanPress(false, true),
                     () -> scanPress(false, false)), pillLp());
@@ -561,21 +603,25 @@ public class MainActivity extends Activity {
             tv.setPadding(dp(6), 0, dp(6), 0);
             tile.addView(tv, new FrameLayout.LayoutParams(-1, -1));
             String url = iconUrls.get(t[0]);
+            ImageView iv = null;
             if (url != null) {
-                ImageView iv = new ImageView(this);
+                iv = new ImageView(this);
                 iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 tile.addView(iv, new FrameLayout.LayoutParams(-1, -1));
                 Bitmap cached = iconCache.get(url);
                 if (cached != null) {
                     iv.setImageBitmap(cached);
                 } else {
+                    final ImageView into = iv;
                     ftv.loadBitmap(url, (bmp, err) -> {
                         iconCache.put(url, bmp);
-                        iv.setImageBitmap(bmp);
+                        into.setImageBitmap(bmp);
                     });
                 }
             }
             final String pkg = t[0];
+            registerTile(tile, pkg, t[1], "order_apps", android.graphics.Color.parseColor(t[2]),
+                    android.graphics.Color.parseColor(t[3]), tv, iv);
             setupTile(tile, pkg, () -> {
                 buzz();
                 ftvCall(() -> ftv.launchApp(pkg));
@@ -592,8 +638,7 @@ public class MainActivity extends Activity {
     LinearLayout editRow;
     HorizontalScrollView editScroll;
     String editKey;
-    View doneChip;
-    final List<android.animation.ObjectAnimator> wiggles = new ArrayList<>();
+    final Map<View, android.animation.ObjectAnimator> wiggles = new HashMap<>();
     final java.util.Random rnd = new java.util.Random();
 
     /** Saved order first (by id), anything new keeps its default place after those. */
@@ -613,7 +658,18 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Tap = open. Hold = wiggle mode and pick it up. In wiggle mode, just drag. */
+    // drag state: the picked-up tile follows the finger, the others slide out of its way,
+    // and the row's real order only changes once the finger lifts
+    View dragView;
+    final List<View> dragTiles = new ArrayList<>();
+    int dragFrom, dragTo;
+    float dragSlot, dragStartRawX, dragLastRawX, dragScrolled;
+    boolean dragMoved;
+    float touchRawX;
+    String lastTapId;
+    long lastTapAt;
+
+    /** Tap = open. Hold = wiggle mode and pick it up. In wiggle mode: drag to move, double tap for colour. */
     @android.annotation.SuppressLint("ClickableViewAccessibility")
     void setupTile(View tile, String id, Runnable onTap, HorizontalScrollView hs, String prefKey) {
         tile.setTag(id);
@@ -621,27 +677,42 @@ public class MainActivity extends Activity {
             if (!editMode) onTap.run();
         });
         tile.setOnLongClickListener(v -> {
-            if (!editMode) startEditMode((LinearLayout) v.getParent(), hs, prefKey);
-            pickUp(v);
+            if (editMode) return true;
+            v.getParent().requestDisallowInterceptTouchEvent(true); // stop the row scrolling under the drag
+            startEditMode((LinearLayout) v.getParent(), hs, prefKey);
+            beginDrag(v, touchRawX);
+            dragMoved = true; // letting go after the hold isn't a tap
             return true;
         });
-        final float[] down = new float[2];
         tile.setOnTouchListener((v, e) -> {
+            int a = e.getActionMasked();
+            touchRawX = e.getRawX();
             if (!editMode) return false;
-            switch (e.getActionMasked()) {
+            switch (a) {
                 case android.view.MotionEvent.ACTION_DOWN:
-                    down[0] = e.getRawX();
-                    down[1] = e.getRawY();
+                    if (dragView != null) return false; // one tile at a time
                     v.getParent().requestDisallowInterceptTouchEvent(true);
+                    beginDrag(v, e.getRawX());
                     return true;
                 case android.view.MotionEvent.ACTION_MOVE:
-                    if (Math.hypot(e.getRawX() - down[0], e.getRawY() - down[1]) > dp(8)) pickUp(v);
+                    if (dragView == v) moveDrag(e.getRawX());
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                    v.setPressed(false);
+                    if (dragView == v) {
+                        boolean tap = !dragMoved;
+                        endDrag();
+                        if (tap) tileTapped(v);
+                    }
+                    return true;
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    v.setPressed(false);
+                    if (dragView == v) endDrag();
                     return true;
                 default:
                     return true;
             }
         });
-        tile.setOnDragListener(tileDrag);
     }
 
     void startEditMode(LinearLayout row, HorizontalScrollView hs, String prefKey) {
@@ -649,51 +720,52 @@ public class MainActivity extends Activity {
         editRow = row;
         editScroll = hs;
         editKey = prefKey;
+        row.setClipChildren(false);
+        hs.setClipChildren(false);
         buzz();
         for (int i = 0; i < row.getChildCount(); i++) {
             View v = row.getChildAt(i);
-            if (v.getTag() == null) continue;
-            android.animation.ObjectAnimator a = android.animation.ObjectAnimator.ofFloat(v, "rotation", -1.8f, 1.8f);
-            a.setDuration(120 + rnd.nextInt(40));
-            a.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-            a.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-            a.setStartDelay(rnd.nextInt(90));
-            a.start();
-            wiggles.add(a);
+            if (v.getTag() != null) startWiggle(v);
         }
-        TextView done = new TextView(this);
-        done.setText("Done");
-        done.setTextColor(0xFFFFFFFF);
-        done.setTypeface(null, Typeface.BOLD);
-        done.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        done.setGravity(Gravity.CENTER);
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(BLUE);
-        g.setCornerRadius(dp(18));
-        done.setBackground(g);
-        done.setOnClickListener(v -> stopEditMode(true));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(76), dp(40));
-        lp.setMargins(dp(8), 0, dp(8), 0);
-        row.addView(done, lp);
-        doneChip = done;
-        toast("Drag to rearrange, then tap Done");
+        if (statusKind == ST_NONE) clearStatus(); // shows Done in place of the name
+        toast("Drag to move. Double tap to change colour. Done is at the top.");
+    }
+
+    void startWiggle(View v) {
+        android.animation.ObjectAnimator a = android.animation.ObjectAnimator.ofFloat(v, "rotation", -1.8f, 1.8f);
+        a.setDuration(120 + rnd.nextInt(40));
+        a.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+        a.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        a.setStartDelay(rnd.nextInt(90));
+        a.start();
+        wiggles.put(v, a);
+    }
+
+    void stopWiggle(View v) {
+        android.animation.ObjectAnimator a = wiggles.remove(v);
+        if (a != null) a.cancel();
+        v.setRotation(0);
     }
 
     void stopEditMode(boolean save) {
         if (!editMode) return;
+        if (dragView != null) endDrag();
         editMode = false;
-        for (android.animation.ObjectAnimator a : wiggles) a.cancel();
+        for (android.animation.ObjectAnimator a : wiggles.values()) a.cancel();
         wiggles.clear();
         if (editRow != null) {
             for (int i = 0; i < editRow.getChildCount(); i++) {
                 View v = editRow.getChildAt(i);
                 v.setRotation(0);
-                v.setVisibility(View.VISIBLE);
+                v.setTranslationX(0);
+                v.setScaleX(1);
+                v.setScaleY(1);
+                v.setTranslationZ(0);
             }
-            if (doneChip != null) editRow.removeView(doneChip);
             if (save) saveRowOrder();
         }
-        doneChip = null;
+        lastTapId = null;
+        if (statusKind == ST_NONE) clearStatus(); // name back in place of Done
     }
 
     void saveRowOrder() {
@@ -706,49 +778,227 @@ public class MainActivity extends Activity {
         prefs.edit().putString(editKey, arr.toString()).apply();
     }
 
-    void pickUp(View v) {
-        if (v.getTag() == null) return;
-        android.content.ClipData data = android.content.ClipData.newPlainText("tile", String.valueOf(v.getTag()));
-        float rot = v.getRotation();
-        v.setRotation(0);
-        if (v.startDragAndDrop(data, new View.DragShadowBuilder(v), v, 0)) {
-            v.setVisibility(View.INVISIBLE);
+    void beginDrag(View v, float rawX) {
+        LinearLayout row = (LinearLayout) v.getParent();
+        if (row == null) return;
+        dragTiles.clear();
+        for (int i = 0; i < row.getChildCount(); i++) {
+            View c = row.getChildAt(i);
+            if (c.getTag() != null) dragTiles.add(c);
         }
-        v.setRotation(rot);
+        dragView = v;
+        dragFrom = dragTo = dragTiles.indexOf(v);
+        dragSlot = dragTiles.size() > 1 ? dragTiles.get(1).getLeft() - dragTiles.get(0).getLeft() : v.getWidth();
+        if (dragSlot <= 0) dragSlot = v.getWidth() + dp(10);
+        dragStartRawX = dragLastRawX = rawX;
+        dragScrolled = 0;
+        dragMoved = false;
+        stopWiggle(v);
+        v.setTranslationZ(dp(10)); // draw over its neighbours
+        v.animate().scaleX(1.07f).scaleY(1.07f).setDuration(120).start();
+        h.removeCallbacks(dragAutoScroll);
+        h.post(dragAutoScroll);
     }
 
-    /** Live reorder: when the dragged tile passes over another, it takes that tile's place. */
-    final View.OnDragListener tileDrag = (target, e) -> {
-        Object state = e.getLocalState();
-        if (!(state instanceof View)) return false;
-        View dragged = (View) state;
-        switch (e.getAction()) {
-            case android.view.DragEvent.ACTION_DRAG_STARTED:
-                return target.getParent() == dragged.getParent();
-            case android.view.DragEvent.ACTION_DRAG_ENTERED:
-                if (target != dragged && target.getParent() == dragged.getParent()) {
-                    LinearLayout row = (LinearLayout) target.getParent();
-                    int to = row.indexOfChild(target);
-                    row.removeView(dragged);
-                    row.addView(dragged, to);
-                    buzz();
+    void moveDrag(float rawX) {
+        if (dragView == null) return;
+        dragLastRawX = rawX;
+        if (Math.abs(rawX - dragStartRawX) > dp(6)) dragMoved = true;
+        float dx = rawX - dragStartRawX + dragScrolled;
+        int n = dragTiles.size();
+        // don't let it go past the first or last place
+        float minDx = -dragFrom * dragSlot, maxDx = (n - 1 - dragFrom) * dragSlot;
+        dx = Math.max(minDx - dragSlot * 0.3f, Math.min(maxDx + dragSlot * 0.3f, dx));
+        dragView.setTranslationX(dx);
+        int to = Math.round(dragFrom + dx / dragSlot);
+        to = Math.max(0, Math.min(n - 1, to));
+        if (to != dragTo) {
+            dragTo = to;
+            buzz();
+            for (int i = 0; i < n; i++) {
+                View t = dragTiles.get(i);
+                if (t == dragView) continue;
+                float shift = 0;
+                if (dragFrom < dragTo && i > dragFrom && i <= dragTo) shift = -dragSlot;
+                else if (dragTo < dragFrom && i >= dragTo && i < dragFrom) shift = dragSlot;
+                t.animate().translationX(shift).setDuration(140).start();
+            }
+        }
+    }
+
+    /** Near either edge of the row, scroll it along so the tile can go further. */
+    final Runnable dragAutoScroll = new Runnable() {
+        @Override
+        public void run() {
+            if (dragView == null || editScroll == null) return;
+            int[] loc = new int[2];
+            editScroll.getLocationOnScreen(loc);
+            float x = dragLastRawX - loc[0];
+            int step = 0;
+            if (x < dp(48)) step = -dp(9);
+            else if (x > editScroll.getWidth() - dp(48)) step = dp(9);
+            if (step != 0) {
+                int before = editScroll.getScrollX();
+                editScroll.scrollBy(step, 0);
+                int moved = editScroll.getScrollX() - before;
+                if (moved != 0) {
+                    dragScrolled += moved;
+                    moveDrag(dragLastRawX);
                 }
-                return true;
-            case android.view.DragEvent.ACTION_DRAG_LOCATION:
-                if (editScroll != null) {
-                    float x = target.getLeft() + e.getX() - editScroll.getScrollX();
-                    if (x < dp(56)) editScroll.scrollBy(-dp(14), 0);
-                    else if (x > editScroll.getWidth() - dp(56)) editScroll.scrollBy(dp(14), 0);
-                }
-                return true;
-            case android.view.DragEvent.ACTION_DRAG_ENDED:
-                dragged.setVisibility(View.VISIBLE);
-                saveRowOrder();
-                return true;
-            default:
-                return true;
+            }
+            h.postDelayed(this, 16);
         }
     };
+
+    /** Finger up: put the tile in its new place for real, then save. */
+    void endDrag() {
+        h.removeCallbacks(dragAutoScroll);
+        View v = dragView;
+        dragView = null;
+        if (v == null) return;
+        final int from = dragFrom, to = dragTo;
+        final List<View> tiles = new ArrayList<>(dragTiles);
+        // after this touch event has finished, never while it's still being delivered
+        h.post(() -> {
+            LinearLayout row = (LinearLayout) v.getParent();
+            if (row != null && from != to && to >= 0 && to < tiles.size()) {
+                int toIndex = row.indexOfChild(tiles.get(to));
+                row.removeView(v);
+                row.addView(v, toIndex);
+            }
+            for (View t : tiles) {
+                t.animate().cancel();
+                t.setTranslationX(0);
+            }
+            v.animate().cancel();
+            v.setScaleX(1);
+            v.setScaleY(1);
+            v.setTranslationZ(0);
+            if (editMode) {
+                startWiggle(v);
+                saveRowOrder();
+            }
+        });
+    }
+
+    /** Two taps on the same tile in wiggle mode: pick its colour. */
+    void tileTapped(View v) {
+        String id = String.valueOf(v.getTag());
+        long now = System.currentTimeMillis();
+        if (id.equals(lastTapId) && now - lastTapAt < 450) {
+            lastTapId = null;
+            showColourPicker(v);
+        } else {
+            lastTapId = id;
+            lastTapAt = now;
+        }
+    }
+
+    // ---- tile colours (double tap a tile in wiggle mode) -----------------------------------
+
+    /** What a tile looks like by default, so "Default" can put it back. */
+    static class TileLook {
+        String name, prefKey;
+        int bg, fg;
+        TextView label;
+        View image; // app banner; hidden while a custom colour is set so the colour shows
+    }
+
+    final Map<View, TileLook> tileLooks = new HashMap<>();
+
+    static final int[] TILE_COLOURS = {
+            0xFFD32F2F, 0xFFE91E63, 0xFF8E24AA, 0xFF5E35B1, 0xFF3949AB,
+            0xFF1E88E5, 0xFF039BE5, 0xFF00ACC1, 0xFF00897B, 0xFF43A047,
+            0xFF7CB342, 0xFFC0CA33, 0xFFFDD835, 0xFFFFB300, 0xFFFB8C00,
+            0xFFF4511E, 0xFF6D4C41, 0xFF546E7A, 0xFF111111, 0xFFFFFFFF,
+    };
+
+    org.json.JSONObject tileColours(String prefKey) {
+        try {
+            return new org.json.JSONObject(prefs.getString("colours_" + prefKey, "{}"));
+        } catch (Exception e) {
+            return new org.json.JSONObject();
+        }
+    }
+
+    static int contrastText(int c) {
+        int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+        return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? 0xFF000000 : 0xFFFFFFFF;
+    }
+
+    void registerTile(View tile, String id, String name, String prefKey, int bg, int fg, TextView label, View image) {
+        TileLook look = new TileLook();
+        look.name = name;
+        look.prefKey = prefKey;
+        look.bg = bg;
+        look.fg = fg;
+        look.label = label;
+        look.image = image;
+        tileLooks.put(tile, look);
+        org.json.JSONObject saved = tileColours(prefKey);
+        if (saved.has(id)) paintTile(tile, saved.optInt(id));
+    }
+
+    /** colour 0 = back to the tile's own look. */
+    void paintTile(View tile, int colour) {
+        TileLook look = tileLooks.get(tile);
+        if (look == null) return;
+        int bg = colour == 0 ? look.bg : colour;
+        ((GradientDrawable) tile.getBackground()).setColor(bg);
+        look.label.setTextColor(colour == 0 ? look.fg : contrastText(colour));
+        if (look.image != null) look.image.setVisibility(colour == 0 ? View.VISIBLE : View.GONE);
+    }
+
+    void showColourPicker(View tile) {
+        TileLook look = tileLooks.get(tile);
+        if (look == null) return;
+        buzz();
+        String id = String.valueOf(tile.getTag());
+        org.json.JSONObject saved = tileColours(look.prefKey);
+        int current = saved.optInt(id, 0);
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(dp(16), dp(12), dp(16), dp(4));
+        AlertDialog[] dlg = new AlertDialog[1];
+        java.util.function.IntConsumer choose = colour -> {
+            org.json.JSONObject all = tileColours(look.prefKey);
+            try {
+                if (colour == 0) all.remove(id);
+                else all.put(id, colour);
+            } catch (Exception ignored) {
+            }
+            prefs.edit().putString("colours_" + look.prefKey, all.toString()).apply();
+            paintTile(tile, colour);
+            if (dlg[0] != null) dlg[0].dismiss();
+        };
+        int perRow = 5;
+        LinearLayout row = null;
+        for (int i = 0; i < TILE_COLOURS.length; i++) {
+            if (i % perRow == 0) {
+                row = new LinearLayout(this);
+                row.setGravity(Gravity.CENTER);
+                grid.addView(row, new LinearLayout.LayoutParams(-1, dp(56)));
+            }
+            final int col = TILE_COLOURS[i];
+            View sw = new View(this);
+            GradientDrawable g = new GradientDrawable();
+            g.setShape(GradientDrawable.OVAL);
+            g.setColor(col);
+            if (col == current) g.setStroke(dp(4), BLUE);
+            else g.setStroke(dp(1), 0xFF666666);
+            sw.setBackground(g);
+            sw.setOnClickListener(v -> choose.accept(col));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44), dp(44));
+            lp.setMargins(dp(5), 0, dp(5), 0);
+            row.addView(sw, lp);
+        }
+        dlg[0] = new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Colour for " + look.name)
+                .setView(grid)
+                .setNeutralButton("Default", (d, w) -> choose.accept(0))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
 
     @Override
     public void onBackPressed() {
@@ -827,7 +1077,6 @@ public class MainActivity extends Activity {
     static final int REQ_MIC = 43, REQ_IMPORT = 44;
     VoiceEngine voice;
     Widgets.CircleButton micBtn;
-    TextView voiceBanner;
     boolean micHeld;
     String lastHeard;
 
@@ -964,13 +1213,60 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ---- status bar over the Fire TV name ----------------------------------------------------
+
+    static final int ST_NONE = 0, ST_INFO = 1, ST_FAILED = 2, ST_TVMODE = 3, ST_FLASH = 4;
+    int statusKind = ST_NONE;
+    final Runnable clearFailed = () -> {
+        if (statusKind == ST_FAILED || statusKind == ST_FLASH) clearStatus();
+    };
+
+    void showStatus(String text, int color, int kind) {
+        h.removeCallbacks(clearFailed);
+        statusKind = kind;
+        statusBar.setText(text);
+        ((GradientDrawable) statusBar.getBackground()).setColor(color);
+        statusBar.setTextColor(kind == ST_TVMODE ? 0xFF000000 : 0xFFFFFFFF);
+        statusBar.setVisibility(View.VISIBLE);
+        titleRowView.setVisibility(View.INVISIBLE);
+        doneBtn.setVisibility(View.GONE);
+    }
+
+    /** Back to the Fire TV name (or the TV-menu bar / Done button if one of those is still wanted). */
+    void clearStatus() {
+        h.removeCallbacks(clearFailed);
+        if (tvMode) {
+            showStatus("TV menu mode. Tap here when done", AMBER, ST_TVMODE);
+            return;
+        }
+        statusKind = ST_NONE;
+        statusBar.setVisibility(View.GONE);
+        if (editMode) {
+            doneBtn.setVisibility(View.VISIBLE);
+            titleRowView.setVisibility(View.INVISIBLE);
+        } else {
+            doneBtn.setVisibility(View.GONE);
+            titleRowView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    void statusTapped() {
+        if (statusKind == ST_TVMODE) setTvMode(false);
+        else if (statusKind == ST_FAILED || statusKind == ST_FLASH) clearStatus();
+    }
+
+    /** Short green message in the status bar that goes by itself. */
+    void flash(String text) {
+        showStatus(text, GREEN, ST_FLASH);
+        h.postDelayed(clearFailed, 2500);
+    }
+
     void showVoiceBanner(String text) {
-        voiceBanner.setText(text);
-        voiceBanner.setVisibility(View.VISIBLE);
+        showStatus(text, GREEN, ST_INFO);
     }
 
     void endVoiceUi() {
-        voiceBanner.setVisibility(View.GONE);
+        if (statusKind == ST_INFO) clearStatus();
         micBtn.setFill(0xFFCC0000);
     }
 
@@ -1283,6 +1579,8 @@ public class MainActivity extends Activity {
             inner.addView(tv, new LinearLayout.LayoutParams(-1, -2));
             tile.addView(inner, new FrameLayout.LayoutParams(-1, -1));
             loadAvatar(c, avatar);
+            registerTile(tile, c.key(), c.title, "order_channels",
+                    palette[Math.abs(c.title.hashCode()) % palette.length], 0xFFFFFFFF, tv, null);
             setupTile(tile, c.key(), () -> {
                 buzz();
                 openChannel(c);
@@ -1336,9 +1634,12 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Errors show in red where the Fire TV name is, for a few seconds (tap to clear). */
     void failed(String why) {
-        endVoiceUi();
-        Toast.makeText(this, "Failed: " + why, Toast.LENGTH_LONG).show();
+        micBtn.setFill(0xFFCC0000);
+        showStatus("Failed: " + why, RED, ST_FAILED);
+        h.postDelayed(clearFailed, 5000);
+        if (liveStatus != null) liveStatus.setText("Failed: " + why); // keyboard box covers the bar
     }
 
     // ---- ADB: hand the Fire TV a link (channel page, search results) ---------------------
@@ -1748,14 +2049,14 @@ public class MainActivity extends Activity {
         String text = intent.getStringExtra(android.content.Intent.EXTRA_TEXT);
         intent.setAction(null); // don't add it again on rotation
         if (text == null || !(text.contains("youtube.com") || text.contains("youtu.be"))) {
-            toast("Share a YouTube channel or video to add it");
+            failed("that share had no YouTube link in it");
             return;
         }
         addSharedChannel(text);
     }
 
     void addSharedChannel(String text) {
-        toast("Adding channel…");
+        showVoiceBanner("Adding channel…");
         avatarExec.execute(() -> {
             String err = null;
             Channel c = new Channel();
@@ -1805,13 +2106,13 @@ public class MainActivity extends Activity {
                 else c.title = c.id;
                 if (c.title.isEmpty()) throw new IllegalStateException("Couldn't work out which channel that is");
             } catch (Exception e) {
-                err = "Couldn't add that channel: " + e.getMessage();
+                err = "couldn't add that channel (" + e.getMessage() + ")";
             }
             final String fErr = err;
             final String fImage = image;
             h.post(() -> {
                 if (fErr != null) {
-                    toast(fErr);
+                    failed(fErr);
                     return;
                 }
                 if (fImage != null && !fImage.isEmpty()) prefs.edit().putString("avatar_" + c.avatarKey(), fImage).apply();
@@ -1831,7 +2132,7 @@ public class MainActivity extends Activity {
                 fav.add(c.key());
                 saveFavKeys(fav);
                 selectTab(2);
-                toast("Added " + c.title + " to Channels");
+                flash("Added " + c.title + " to Channels");
             });
         });
     }
@@ -1915,14 +2216,23 @@ public class MainActivity extends Activity {
                     List<Channel> all = loadChannels();
                     Channel c = new Channel();
                     c.title = t;
-                    for (Channel x : all) if (x.key().equals(c.key())) return;
-                    all.add(c);
-                    saveChannels(all);
+                    boolean have = false;
+                    for (Channel x : all) {
+                        if (x.key().equals(c.key()) || x.title.equalsIgnoreCase(t) || (!x.handle.isEmpty() && x.handle.equalsIgnoreCase(t))) {
+                            c = x; // already in the list: just make it a favourite again
+                            have = true;
+                            break;
+                        }
+                    }
+                    if (!have) {
+                        all.add(c);
+                        saveChannels(all);
+                    }
                     java.util.Set<String> fav = loadFavKeys();
                     fav.add(c.key());
                     saveFavKeys(fav);
                     selectTab(2);
-                    toast("Added " + t + " to favourites");
+                    flash("Added " + t + " to Channels");
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1978,7 +2288,7 @@ public class MainActivity extends Activity {
             final List<Channel> fImported = imported;
             h.post(() -> {
                 if (fErr != null) {
-                    toast(fErr);
+                    failed(fErr);
                     return;
                 }
                 List<Channel> all = loadChannels();
@@ -2086,7 +2396,8 @@ public class MainActivity extends Activity {
     void setTvMode(boolean on) {
         tvMode = on;
         h.removeCallbacks(leaveTvMode);
-        banner.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on) showStatus("TV menu mode. Tap here when done", AMBER, ST_TVMODE);
+        else if (statusKind == ST_TVMODE) clearStatus();
         trackpad.setPadColor(on ? TV_PAD : PAD);
         if (on) {
             trackpad.setHint("TV menu: swipe to move,", "tap for OK");

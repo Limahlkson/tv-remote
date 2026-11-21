@@ -9,7 +9,7 @@ import android.graphics.RectF;
 public final class Icons {
     public static final int NONE = 0, POWER = 1, MENU = 2, GEAR = 3, INPUT = 4, MUTE = 5, KEYBOARD = 6,
             BACK = 7, HOME = 8, MOON = 9, MORE = 10, PLAY_PAUSE = 11, REWIND = 12, FFWD = 13, TV = 14,
-            CHEV_UP = 15, CHEV_DOWN = 16, PLUS = 17, MINUS = 18, EXIT = 19, MIC = 20, COMMENTS = 21;
+            CHEV_UP = 15, CHEV_DOWN = 16, PLUS = 17, MINUS = 18, EXIT = 19, MIC = 20, COMMENTS = 21, SWAP = 22;
 
     private static final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -190,6 +190,17 @@ public final class Icons {
                 sp.setStrokeWidth(Math.max(2f, u * 0.16f));
                 c.drawPath(p, sp);
                 for (int i = -1; i <= 1; i++) c.drawCircle(cx + i * u * 0.45f, cy - u * 0.15f, u * 0.13f, fill);
+                break;
+            }
+            case SWAP: {
+                // arrow right on top, arrow left underneath
+                float y1 = cy - u * 0.45f, y2 = cy + u * 0.45f, hd = u * 0.38f;
+                c.drawLine(cx - u, y1, cx + u, y1, stroke);
+                c.drawLine(cx + u, y1, cx + u - hd, y1 - hd, stroke);
+                c.drawLine(cx + u, y1, cx + u - hd, y1 + hd, stroke);
+                c.drawLine(cx - u, y2, cx + u, y2, stroke);
+                c.drawLine(cx - u, y2, cx - u + hd, y2 - hd, stroke);
+                c.drawLine(cx - u, y2, cx - u + hd, y2 + hd, stroke);
                 break;
             }
             case EXIT:
