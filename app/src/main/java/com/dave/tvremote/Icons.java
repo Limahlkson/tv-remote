@@ -9,7 +9,7 @@ import android.graphics.RectF;
 public final class Icons {
     public static final int NONE = 0, POWER = 1, MENU = 2, GEAR = 3, INPUT = 4, MUTE = 5, KEYBOARD = 6,
             BACK = 7, HOME = 8, MOON = 9, MORE = 10, PLAY_PAUSE = 11, REWIND = 12, FFWD = 13, TV = 14,
-            CHEV_UP = 15, CHEV_DOWN = 16, PLUS = 17, MINUS = 18, EXIT = 19;
+            CHEV_UP = 15, CHEV_DOWN = 16, PLUS = 17, MINUS = 18, EXIT = 19, MIC = 20;
 
     private static final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -165,6 +165,11 @@ public final class Icons {
                 break;
             case MINUS:
                 c.drawLine(cx - u * 0.7f, cy, cx + u * 0.7f, cy, stroke);
+                break;
+            case MIC:
+                c.drawRoundRect(new RectF(cx - u * 0.38f, cy - u * 1.0f, cx + u * 0.38f, cy + u * 0.25f), u * 0.38f, u * 0.38f, fill);
+                c.drawArc(new RectF(cx - u * 0.72f, cy - u * 0.6f, cx + u * 0.72f, cy + u * 0.6f), 0, 180, false, stroke);
+                c.drawLine(cx, cy + u * 0.6f, cx, cy + u * 1.0f, stroke);
                 break;
             case EXIT:
                 c.drawLine(cx - u * 0.6f, cy - u * 0.6f, cx + u * 0.6f, cy + u * 0.6f, stroke);

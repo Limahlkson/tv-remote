@@ -184,6 +184,42 @@ public class FireTvClient {
         }
     }
 
+    public static final String YOUTUBE = "com.amazon.firetv.youtube";
+
+    /**
+     * Opens YouTube on the Fire TV, moves to its Search page and types the query.
+     * There is no direct search command in the Fire TV API, so this drives the screen like a remote.
+     */
+    public void youtubeSearch(String query, Runnable onTyped) {
+        submit(() -> {
+            post("/v1/FireTV?action=home", null);  // leave any playing video first
+            sleep(1200);
+            post("/v1/FireTV/app/" + YOUTUBE, null);
+            sleep(7000);                            // YouTube takes a few seconds to load
+            post("/v1/FireTV?action=dpad_left", null); // open the side menu
+            sleep(700);
+            for (int i = 0; i < 6; i++) {           // Search is the top item
+                post("/v1/FireTV?action=dpad_up", null);
+                sleep(250);
+            }
+            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyDown\"}");
+            sleep(150);
+            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
+            sleep(1800);
+            for (int i = 0; i < query.length(); ) {
+                int cp = query.codePointAt(i);
+                i += Character.charCount(cp);
+                JSONObject o = new JSONObject();
+                try {
+                    o.put("text", new String(Character.toChars(cp)));
+                } catch (Exception ignored) {
+                }
+                post("/v1/FireTV/text", o.toString());
+            }
+            if (onTyped != null) main.post(onTyped);
+        });
+    }
+
     public void launchApp(String pkg) {
         submit(() -> post("/v1/FireTV/app/" + pkg, null));
     }

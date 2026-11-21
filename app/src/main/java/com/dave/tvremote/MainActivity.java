@@ -262,6 +262,13 @@ public class MainActivity extends Activity {
         Widgets.CircleButton mute = new Widgets.CircleButton(this, Icons.MUTE, BTN, TEXT).ring(CARD, ring)
                 .iconScale(0.36f).action(() -> irPress(IrRemote.MUTE, false), false);
         padArea.addView(mute, cornerLp(corner, Gravity.TOP | Gravity.END));
+        Widgets.CircleButton mic = new Widgets.CircleButton(this, Icons.MIC, 0xFFCC0000, 0xFFFFFFFF)
+                .iconScale(0.34f).action(this::startYouTubeVoiceSearch, false)
+                .longAction(this::askYouTubeTyped);
+        FrameLayout.LayoutParams micLp = new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.TOP | Gravity.END);
+        micLp.topMargin = corner - dp(10) + dp(8);
+        micLp.setMarginEnd((corner - dp(54)) / 2 - dp(10));
+        padArea.addView(mic, micLp);
         backBtn = new Widgets.CircleButton(this, Icons.BACK, BTN, TEXT).ring(CARD, ring).iconScale(0.36f)
                 .action(this::backPressed, false);
         padArea.addView(backBtn, cornerLp(corner + dp(8), Gravity.BOTTOM | Gravity.START));
@@ -594,6 +601,57 @@ public class MainActivity extends Activity {
             h.removeCallbacks(scanSafety);
             ftv.scanKey(forward, false);
         }
+    }
+
+    static final int REQ_SPEECH = 42;
+
+    void startYouTubeVoiceSearch() {
+        if (!checkPaired()) return;
+        buzz();
+        android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH);
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-GB");
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Search YouTube for…");
+        i.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        try {
+            startActivityForResult(i, REQ_SPEECH);
+        } catch (Exception e) {
+            askYouTubeTyped(); // no speech recogniser on the phone: type it instead
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_SPEECH || resultCode != RESULT_OK || data == null) return;
+        java.util.ArrayList<String> res =
+                data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
+        if (res == null || res.isEmpty() || res.get(0).trim().isEmpty()) return;
+        runYouTubeSearch(res.get(0).trim());
+    }
+
+    void askYouTubeTyped() {
+        EditText et = new EditText(this);
+        et.setSingleLine(true);
+        et.setHint("What do you want to watch?");
+        LinearLayout box = new LinearLayout(this);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(et, new LinearLayout.LayoutParams(-1, -2));
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Search YouTube")
+                .setView(box)
+                .setPositiveButton("Search", (d, w) -> {
+                    String q = et.getText().toString().trim();
+                    if (!q.isEmpty()) runYouTubeSearch(q);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    void runYouTubeSearch(String q) {
+        Toast.makeText(this, "Searching YouTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
+        ftv.youtubeSearch(q, () -> toast("Typed \"" + q + "\" into YouTube search"));
     }
 
     void inputPressed() {
