@@ -277,19 +277,28 @@ public class MainActivity extends Activity {
         padArea.addView(dpad, dlp);
 
         int corner = dp(74), ring = dp(9);
-        Widgets.CircleButton kb = new Widgets.CircleButton(this, Icons.KEYBOARD, BTN, TEXT).ring(CARD, ring)
-                .iconScale(0.4f).action(this::showKeyboard, false);
-        padArea.addView(kb, cornerLp(corner, Gravity.TOP | Gravity.START));
-        Widgets.CircleButton mute = new Widgets.CircleButton(this, Icons.MUTE, BTN, TEXT).ring(CARD, ring)
-                .iconScale(0.36f).action(() -> irPress(IrRemote.MUTE, false), false);
-        padArea.addView(mute, cornerLp(corner, Gravity.TOP | Gravity.END));
+        int notch = dp(64), notchRing = dp(7);          // keyboard + mute: 50dp button inside the notch
+        int side = dp(50);                              // mic + comments match that 50dp
+        Widgets.CircleButton kb = new Widgets.CircleButton(this, Icons.KEYBOARD, BTN, TEXT).ring(CARD, notchRing)
+                .iconScale(0.42f).action(this::showKeyboard, false);
+        padArea.addView(kb, cornerLp(notch, Gravity.TOP | Gravity.START));
+        Widgets.CircleButton mute = new Widgets.CircleButton(this, Icons.MUTE, BTN, TEXT).ring(CARD, notchRing)
+                .iconScale(0.38f).action(() -> irPress(IrRemote.MUTE, false), false);
+        padArea.addView(mute, cornerLp(notch, Gravity.TOP | Gravity.END));
+        int columnEnd = (notch / 2 - dp(10)) - side / 2;  // centre the column under the mute button
         Widgets.CircleButton mic = new Widgets.CircleButton(this, Icons.MIC, 0xFFCC0000, 0xFFFFFFFF)
-                .iconScale(0.34f).action(this::micDown, false).release(this::micUp);
+                .iconScale(0.36f).action(this::micDown, false).release(this::micUp);
         micBtn = mic;
-        FrameLayout.LayoutParams micLp = new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.TOP | Gravity.END);
-        micLp.topMargin = corner - dp(10) + dp(8);
-        micLp.setMarginEnd((corner - dp(54)) / 2 - dp(10));
+        FrameLayout.LayoutParams micLp = new FrameLayout.LayoutParams(side, side, Gravity.TOP | Gravity.END);
+        micLp.topMargin = notch - dp(10) + dp(8);
+        micLp.setMarginEnd(columnEnd);
         padArea.addView(mic, micLp);
+        Widgets.CircleButton comments = new Widgets.CircleButton(this, Icons.COMMENTS, BTN, TEXT)
+                .iconScale(0.36f).action(this::openComments, false);
+        FrameLayout.LayoutParams comLp = new FrameLayout.LayoutParams(side, side, Gravity.TOP | Gravity.END);
+        comLp.topMargin = micLp.topMargin + side + dp(10);
+        comLp.setMarginEnd(columnEnd);
+        padArea.addView(comments, comLp);
         backBtn = new Widgets.CircleButton(this, Icons.BACK, BTN, TEXT).ring(CARD, ring).iconScale(0.36f)
                 .action(this::backPressed, false);
         padArea.addView(backBtn, cornerLp(corner + dp(8), Gravity.BOTTOM | Gravity.START));
@@ -352,7 +361,7 @@ public class MainActivity extends Activity {
                 .action(this::inputPressed, false), "Input / AV"), weight());
         top.addView(labelled(new Widgets.CircleButton(this, Icons.POWER, RED, 0xFFFFFFFF).iconScale(0.34f)
                 .action(() -> irPress(IrRemote.POWER, false), false), "TV power"), weight());
-        LinearLayout.LayoutParams topLp = new LinearLayout.LayoutParams(-1, dp(96));
+        LinearLayout.LayoutParams topLp = new LinearLayout.LayoutParams(-1, dp(84));
         topLp.topMargin = dp(10);
         card.addView(top, topLp);
 
@@ -367,7 +376,7 @@ public class MainActivity extends Activity {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(66), dp(66));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(56), dp(56));
         col.addView(button, lp);
         TextView t = new TextView(this);
         t.setText(label);
@@ -399,6 +408,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ tabs
 
     void selectTab(int i) {
+        stopEditMode(false);
         currentTab = i;
         prefs.edit().putInt("tab", i).apply();
         for (int k = 0; k < 3; k++) {
@@ -517,6 +527,7 @@ public class MainActivity extends Activity {
         } else {
             for (String[] f : FAVOURITES) tiles.add(f);
         }
+        applySavedOrder(tiles, t -> t[0], "order_apps");
 
         for (String[] t : tiles) {
             FrameLayout tile = new FrameLayout(this);
@@ -556,14 +567,187 @@ public class MainActivity extends Activity {
                 }
             }
             final String pkg = t[0];
-            tile.setOnClickListener(v -> {
+            setupTile(tile, pkg, () -> {
                 buzz();
                 ftvCall(() -> ftv.launchApp(pkg));
-            });
+            }, hs, "order_apps");
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(118), dp(62));
             lp.setMargins(dp(5), 0, dp(5), 0);
             row.addView(tile, lp);
         }
+    }
+
+    // ---- hold a tile to rearrange the Apps / Channels rows ---------------------------------
+
+    boolean editMode;
+    LinearLayout editRow;
+    HorizontalScrollView editScroll;
+    String editKey;
+    View doneChip;
+    final List<android.animation.ObjectAnimator> wiggles = new ArrayList<>();
+    final java.util.Random rnd = new java.util.Random();
+
+    /** Saved order first (by id), anything new keeps its default place after those. */
+    <T> void applySavedOrder(List<T> items, java.util.function.Function<T, String> id, String prefKey) {
+        List<String> saved = new ArrayList<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(prefs.getString(prefKey, "[]"));
+            for (int i = 0; i < arr.length(); i++) saved.add(arr.getString(i));
+        } catch (Exception ignored) {
+        }
+        if (saved.isEmpty()) return;
+        items.sort((a, b) -> {
+            int ia = saved.indexOf(id.apply(a)), ib = saved.indexOf(id.apply(b));
+            if (ia < 0) ia = Integer.MAX_VALUE;
+            if (ib < 0) ib = Integer.MAX_VALUE;
+            return Integer.compare(ia, ib);
+        });
+    }
+
+    /** Tap = open. Hold = wiggle mode and pick it up. In wiggle mode, just drag. */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    void setupTile(View tile, String id, Runnable onTap, HorizontalScrollView hs, String prefKey) {
+        tile.setTag(id);
+        tile.setOnClickListener(v -> {
+            if (!editMode) onTap.run();
+        });
+        tile.setOnLongClickListener(v -> {
+            if (!editMode) startEditMode((LinearLayout) v.getParent(), hs, prefKey);
+            pickUp(v);
+            return true;
+        });
+        final float[] down = new float[2];
+        tile.setOnTouchListener((v, e) -> {
+            if (!editMode) return false;
+            switch (e.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    down[0] = e.getRawX();
+                    down[1] = e.getRawY();
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    return true;
+                case android.view.MotionEvent.ACTION_MOVE:
+                    if (Math.hypot(e.getRawX() - down[0], e.getRawY() - down[1]) > dp(8)) pickUp(v);
+                    return true;
+                default:
+                    return true;
+            }
+        });
+        tile.setOnDragListener(tileDrag);
+    }
+
+    void startEditMode(LinearLayout row, HorizontalScrollView hs, String prefKey) {
+        editMode = true;
+        editRow = row;
+        editScroll = hs;
+        editKey = prefKey;
+        buzz();
+        for (int i = 0; i < row.getChildCount(); i++) {
+            View v = row.getChildAt(i);
+            if (v.getTag() == null) continue;
+            android.animation.ObjectAnimator a = android.animation.ObjectAnimator.ofFloat(v, "rotation", -1.8f, 1.8f);
+            a.setDuration(120 + rnd.nextInt(40));
+            a.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            a.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            a.setStartDelay(rnd.nextInt(90));
+            a.start();
+            wiggles.add(a);
+        }
+        TextView done = new TextView(this);
+        done.setText("Done");
+        done.setTextColor(0xFFFFFFFF);
+        done.setTypeface(null, Typeface.BOLD);
+        done.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        done.setGravity(Gravity.CENTER);
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(BLUE);
+        g.setCornerRadius(dp(18));
+        done.setBackground(g);
+        done.setOnClickListener(v -> stopEditMode(true));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(84), dp(48));
+        lp.setMargins(dp(8), 0, dp(8), 0);
+        row.addView(done, lp);
+        doneChip = done;
+        toast("Drag to rearrange, then tap Done");
+    }
+
+    void stopEditMode(boolean save) {
+        if (!editMode) return;
+        editMode = false;
+        for (android.animation.ObjectAnimator a : wiggles) a.cancel();
+        wiggles.clear();
+        if (editRow != null) {
+            for (int i = 0; i < editRow.getChildCount(); i++) {
+                View v = editRow.getChildAt(i);
+                v.setRotation(0);
+                v.setVisibility(View.VISIBLE);
+            }
+            if (doneChip != null) editRow.removeView(doneChip);
+            if (save) saveRowOrder();
+        }
+        doneChip = null;
+    }
+
+    void saveRowOrder() {
+        if (editRow == null || editKey == null) return;
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (int i = 0; i < editRow.getChildCount(); i++) {
+            Object tag = editRow.getChildAt(i).getTag();
+            if (tag != null) arr.put(String.valueOf(tag));
+        }
+        prefs.edit().putString(editKey, arr.toString()).apply();
+    }
+
+    void pickUp(View v) {
+        if (v.getTag() == null) return;
+        android.content.ClipData data = android.content.ClipData.newPlainText("tile", String.valueOf(v.getTag()));
+        float rot = v.getRotation();
+        v.setRotation(0);
+        if (v.startDragAndDrop(data, new View.DragShadowBuilder(v), v, 0)) {
+            v.setVisibility(View.INVISIBLE);
+        }
+        v.setRotation(rot);
+    }
+
+    /** Live reorder: when the dragged tile passes over another, it takes that tile's place. */
+    final View.OnDragListener tileDrag = (target, e) -> {
+        Object state = e.getLocalState();
+        if (!(state instanceof View)) return false;
+        View dragged = (View) state;
+        switch (e.getAction()) {
+            case android.view.DragEvent.ACTION_DRAG_STARTED:
+                return target.getParent() == dragged.getParent();
+            case android.view.DragEvent.ACTION_DRAG_ENTERED:
+                if (target != dragged && target.getParent() == dragged.getParent()) {
+                    LinearLayout row = (LinearLayout) target.getParent();
+                    int to = row.indexOfChild(target);
+                    row.removeView(dragged);
+                    row.addView(dragged, to);
+                    buzz();
+                }
+                return true;
+            case android.view.DragEvent.ACTION_DRAG_LOCATION:
+                if (editScroll != null) {
+                    float x = target.getLeft() + e.getX() - editScroll.getScrollX();
+                    if (x < dp(56)) editScroll.scrollBy(-dp(14), 0);
+                    else if (x > editScroll.getWidth() - dp(56)) editScroll.scrollBy(dp(14), 0);
+                }
+                return true;
+            case android.view.DragEvent.ACTION_DRAG_ENDED:
+                dragged.setVisibility(View.VISIBLE);
+                saveRowOrder();
+                return true;
+            default:
+                return true;
+        }
+    };
+
+    @Override
+    public void onBackPressed() {
+        if (editMode) {
+            stopEditMode(true);
+            return;
+        }
+        super.onBackPressed();
     }
 
     void loadApps() {
@@ -733,6 +917,11 @@ public class MainActivity extends Activity {
     /** Tap: put the TV on the search box, ready for speech. */
     void tapOpenSearch() {
         if (!checkPaired()) return;
+        if (adbReady() && searchUsesSmartTube()) {
+            // SmartTube opens Search with the cursor in the box, from any screen
+            openOnTv("https://www.youtube.com/tv?launch=voice", "Opening search…");
+            return;
+        }
         String app = searchUsesSmartTube() ? "SmartTube" : "YouTube";
         toast("Opening " + app + " search…");
         ftv.openSearch(searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
@@ -1046,6 +1235,7 @@ public class MainActivity extends Activity {
         hs.addView(row);
         tabContent.addView(hs, new LinearLayout.LayoutParams(-1, -1));
         int[] palette = {0xFF8E24AA, 0xFF1E88E5, 0xFF00897B, 0xFFF4511E, 0xFF6D4C41, 0xFF3949AB, 0xFFC0CA33, 0xFFD81B60};
+        applySavedOrder(favs, Channel::key, "order_channels");
         for (Channel c : favs) {
             FrameLayout tile = new FrameLayout(this);
             GradientDrawable g = new GradientDrawable();
@@ -1084,10 +1274,10 @@ public class MainActivity extends Activity {
             inner.addView(tv, new LinearLayout.LayoutParams(-1, -2));
             tile.addView(inner, new FrameLayout.LayoutParams(-1, -1));
             loadAvatar(c, avatar);
-            tile.setOnClickListener(v -> {
+            setupTile(tile, c.key(), () -> {
                 buzz();
                 openChannel(c);
-            });
+            }, hs, "order_channels");
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(150), dp(62));
             lp.setMargins(dp(5), 0, dp(5), 0);
             row.addView(tile, lp);
@@ -1934,11 +2124,37 @@ public class MainActivity extends Activity {
     }
 
     void openFireTvSettings() {
-        // Opens the Fire TV's own Settings app
         if (!checkPaired()) return;
         buzz();
-        ftv.launchApp("com.amazon.tv.settings.v2");
+        if (!adbReady()) {
+            failed("Fire TV settings needs the developer connection (⋮ > Direct links)");
+            return;
+        }
+        adb.shell(ftv.getIp(), "am start -a android.settings.SETTINGS", null, (out, err) -> {
+            if (err != null) failed(err);
+            else if (out == null || out.contains("Error") || out.contains("Exception")) failed("Fire TV settings wouldn't open");
+        });
     }
+
+    /** Comments button: open the comments of the SmartTube video that's playing. */
+    void openComments() {
+        if (!checkPaired()) return;
+        buzz();
+        if (!adbReady()) {
+            failed("comments need the developer connection (⋮ > Direct links)");
+            return;
+        }
+        showVoiceBanner("Opening comments…");
+        String ip = ftv.getIp();
+        avatarExec.execute(() -> {
+            String err = TvScreen.openComments(adb, ip);
+            h.post(() -> {
+                if (err != null) failed(err);
+                else endVoiceUi();
+            });
+        });
+    }
+
 
     void buzz() {
         if (!prefs.getBoolean("vibrate", true) || vibrator == null) return;

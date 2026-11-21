@@ -64,7 +64,7 @@ public class AdbClient {
     public void shell(String ip, String command, Runnable onNeedApproval, FireTvClient.Callback<String> cb) {
         exec.execute(() -> {
             try {
-                String out = runShell(ip, command, onNeedApproval);
+                String out = runShell(ip, command, onNeedApproval, 8000);
                 main.post(() -> cb.done(out, null));
             } catch (ConnectException e) {
                 main.post(() -> cb.done(null, "ADB debugging is off on the Fire TV"));
@@ -78,7 +78,12 @@ public class AdbClient {
         });
     }
 
-    private String runShell(String ip, String command, Runnable onNeedApproval) throws Exception {
+    /** Blocking version for background jobs that run several commands in a row. */
+    public String exec(String ip, String command, int timeoutMs) throws Exception {
+        return runShell(ip, command, null, timeoutMs);
+    }
+
+    private String runShell(String ip, String command, Runnable onNeedApproval, int timeoutMs) throws Exception {
         ensureKeys();
         try (Socket s = new Socket()) {
             s.connect(new InetSocketAddress(ip, 5555), 3000);
@@ -106,7 +111,7 @@ public class AdbClient {
                     throw new NotAllowedException("the Fire TV didn't allow this phone");
                 }
             }
-            s.setSoTimeout(8000);
+            s.setSoTimeout(timeoutMs);
 
             int localId = 1;
             send(out, A_OPEN, localId, 0, ("shell:" + command + "\0").getBytes(StandardCharsets.UTF_8));
