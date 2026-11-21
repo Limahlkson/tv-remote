@@ -91,6 +91,8 @@ public class MainActivity extends Activity {
         ftv = new FireTvClient();
         ftv.configure(prefs.getString("ip", null), prefs.getString("token", null), prefs.getString("mac", null));
         ftv.setListener(this::onFireTvStatus);
+        voice = new VoiceEngine();
+        voice.prepare(this, appVersion());
 
         getWindow().setStatusBarColor(PAGE);
         getWindow().setNavigationBarColor(CARD);
@@ -219,6 +221,8 @@ public class MainActivity extends Activity {
             tabs.addView(t, new LinearLayout.LayoutParams(0, dp(46), 1f));
         }
         drawer.addView(tabs);
+        tabViews[2].setOnClickListener(null);
+        tabViews[2].setOnTouchListener(channelsHold);
         tabContent = new LinearLayout(this);
         tabContent.setGravity(Gravity.CENTER_VERTICAL);
         tabContent.setPadding(dp(8), dp(4), dp(8), dp(10));
@@ -417,9 +421,7 @@ public class MainActivity extends Activity {
         } else if (i == 1) {
             buildAppsRow();
         } else {
-            tabContent.addView(pill(Icons.TV, () -> ftvAction("epg")), pillLp());
-            tabContent.addView(pill(Icons.CHEV_DOWN, () -> ftvAction("dpad_down")), pillLp());
-            tabContent.addView(pill(Icons.CHEV_UP, () -> ftvAction("dpad_up")), pillLp());
+            buildChannelsRow();
         }
     }
 
@@ -489,18 +491,25 @@ public class MainActivity extends Activity {
         if (apps != null && !apps.isEmpty()) {
             Map<String, FireTvClient.App> byId = new HashMap<>();
             for (FireTvClient.App a : apps) byId.put(a.id, a);
+            for (FireTvClient.App a : apps) {
+                if (FireTvClient.isSmartTube(a)) {
+                    byId.remove(a.id);
+                    tiles.add(new String[]{a.id, "SmartTube", "#FFCC0000", "#FFFFFFFF"});
+                    if (a.icon != null && !a.icon.isEmpty()) iconUrls.put(a.id, a.icon);
+                }
+            }
             for (String[] f : FAVOURITES) {
                 FireTvClient.App a = byId.remove(f[0]);
                 if (a != null) {
                     tiles.add(f);
-                    if (a.icon != null) iconUrls.put(a.id, a.icon);
+                    if (a.icon != null && !a.icon.isEmpty()) iconUrls.put(a.id, a.icon);
                 }
             }
             List<FireTvClient.App> rest = new ArrayList<>(byId.values());
             rest.sort((x, y) -> x.name.compareToIgnoreCase(y.name));
             for (FireTvClient.App a : rest) {
                 tiles.add(new String[]{a.id, a.name, "#FF444444", "#FFFFFFFF"});
-                if (a.icon != null) iconUrls.put(a.id, a.icon);
+                if (a.icon != null && !a.icon.isEmpty()) iconUrls.put(a.id, a.icon);
             }
         } else {
             for (String[] f : FAVOURITES) tiles.add(f);
@@ -617,61 +626,21 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---- hold-to-talk voice search -------------------------------------------------------
+    // ---- hold-to-talk voice search (offline, inside the app) --------------------------------
 
-    static final int REQ_MIC = 43;
-    android.speech.SpeechRecognizer recognizer;
-    boolean listening, voiceHandled, micHeld;
-    String lastPartial;
+    static final int REQ_MIC = 43, REQ_IMPORT = 44;
+    VoiceEngine voice;
     Widgets.CircleButton micBtn;
     TextView voiceBanner;
-    int sessionEngine;
-    final Runnable voiceWatchdog = this::voiceGaveUp;
+    boolean micHeld;
+    String lastHeard;
 
-    /** Speech engines on this phone: each installed recognition service, Google's first, plus on-device. */
-    List<android.content.ComponentName> voiceEngines() {
-        List<android.content.ComponentName> list = new ArrayList<>();
+    int appVersion() {
         try {
-            List<android.content.pm.ResolveInfo> found = getPackageManager().queryIntentServices(
-                    new android.content.Intent(android.speech.RecognitionService.SERVICE_INTERFACE), 0);
-            for (android.content.pm.ResolveInfo ri : found) {
-                android.content.ComponentName cn = new android.content.ComponentName(
-                        ri.serviceInfo.packageName, ri.serviceInfo.name);
-                if (ri.serviceInfo.packageName.startsWith("com.google")) list.add(0, cn);
-                else list.add(cn);
-            }
-        } catch (Exception ignored) {
+            return (int) getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode();
+        } catch (Exception e) {
+            return 1;
         }
-        list.add(null); // phone's default engine
-        if (Build.VERSION.SDK_INT >= 31) {
-            list.add(new android.content.ComponentName("on-device", "on-device"));
-        }
-        return list;
-    }
-
-    int voiceEngineIndex() {
-        int n = voiceEngines().size();
-        return Math.floorMod(prefs.getInt("voiceEngine", 0), n);
-    }
-
-    String voiceEngineName(int idx) {
-        android.content.ComponentName cn = voiceEngines().get(idx);
-        if (cn == null) return "Phone default";
-        String pkg = cn.getPackageName();
-        if (pkg.equals("on-device")) return "On-device";
-        if (pkg.equals("com.google.android.googlequicksearchbox")) return "Google app";
-        if (pkg.equals("com.google.android.tts")) return "Google speech services";
-        if (pkg.contains("vivo")) return "vivo (" + pkg + ")";
-        return pkg;
-    }
-
-    android.speech.SpeechRecognizer makeRecognizer(int idx) {
-        android.content.ComponentName cn = voiceEngines().get(idx);
-        if (cn == null) return android.speech.SpeechRecognizer.createSpeechRecognizer(this);
-        if ("on-device".equals(cn.getPackageName()) && Build.VERSION.SDK_INT >= 31) {
-            return android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
-        }
-        return android.speech.SpeechRecognizer.createSpeechRecognizer(this, cn);
     }
 
     /** Mic pressed: start listening straight away. */
@@ -683,162 +652,46 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
             return;
         }
-        // fresh recogniser every time; reusing one is what causes "busy" / client errors
-        if (recognizer != null) {
-            try {
-                recognizer.destroy();
-            } catch (Exception ignored) {
-            }
-            recognizer = null;
-        }
-        h.removeCallbacks(voiceWatchdog);
-        sessionEngine = voiceEngineIndex();
-        try {
-            recognizer = makeRecognizer(sessionEngine);
-            recognizer.setRecognitionListener(voiceListener);
-        } catch (Exception e) {
-            nextVoiceEngine("couldn't start");
-            return;
-        }
-        android.content.Intent i = new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "en-GB");
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000);
-        i.putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000);
-        lastPartial = null;
-        voiceHandled = false;
+        if (voice.isRecording()) return;
         micHeld = true;
-        listening = true;
-        showVoiceBanner("Listening… let go to search");
-        micBtn.setFill(0xFF2E7D32);
-        try {
-            recognizer.startListening(i);
-        } catch (Exception e) {
-            listening = false;
-            endVoiceUi();
-            nextVoiceEngine("couldn't start");
+        lastHeard = null;
+        boolean started = voice.start(new VoiceEngine.Listener() {
+            @Override
+            public void onPartial(String text) {
+                lastHeard = text;
+                showVoiceBanner("“" + text + "”" + (micHeld ? "   let go to search" : "   searching…"));
+            }
+
+            @Override
+            public void onFinal(String text) {
+                endVoiceUi();
+                String q = text != null && !text.isEmpty() ? text : (lastHeard == null ? "" : lastHeard);
+                if (q.isEmpty()) {
+                    toast("Didn't catch that. Hold the mic, speak, then let go.");
+                } else {
+                    runYouTubeSearch(q);
+                }
+            }
+
+            @Override
+            public void onError(String message) {
+                endVoiceUi();
+                toast(message);
+            }
+        });
+        if (started) {
+            showVoiceBanner("Listening…   let go to search");
+            micBtn.setFill(0xFF2E7D32);
         }
     }
 
-    /** Mic released: stop listening; the result should arrive within a moment. */
+    /** Mic released: stop listening; the words come back a moment later. */
     void voiceUp() {
         micHeld = false;
-        if (!listening || recognizer == null) return;
-        showVoiceBanner(lastPartial != null ? "“" + lastPartial + "”  searching…" : "Working it out…");
-        try {
-            recognizer.stopListening();
-        } catch (Exception ignored) {
-        }
-        h.removeCallbacks(voiceWatchdog);
-        h.postDelayed(voiceWatchdog, 3500); // never sit on "Working it out…"
+        if (!voice.isRecording()) return;
+        showVoiceBanner(lastHeard != null ? "“" + lastHeard + "”   searching…" : "Working it out…");
+        voice.stop();
     }
-
-    /** No final result came back in time: use what was heard, or give up cleanly. */
-    void voiceGaveUp() {
-        if (voiceHandled) return;
-        voiceHandled = true;
-        listening = false;
-        try {
-            if (recognizer != null) recognizer.cancel();
-        } catch (Exception ignored) {
-        }
-        endVoiceUi();
-        if (lastPartial != null && !lastPartial.isEmpty()) {
-            runYouTubeSearch(lastPartial);
-        } else {
-            nextVoiceEngine("gave no answer");
-        }
-    }
-
-    /** Move to the next speech engine after one fails, so the next press tries something else. */
-    void nextVoiceEngine(String why) {
-        String failed = voiceEngineName(sessionEngine);
-        prefs.edit().putInt("voiceEngine", sessionEngine + 1).apply();
-        toast(failed + " " + why + ". Switched to " + voiceEngineName(voiceEngineIndex())
-                + ": hold the mic and try again.");
-    }
-
-    final android.speech.RecognitionListener voiceListener = new android.speech.RecognitionListener() {
-        @Override
-        public void onReadyForSpeech(Bundle params) {
-        }
-
-        @Override
-        public void onBeginningOfSpeech() {
-        }
-
-        @Override
-        public void onRmsChanged(float rmsdB) {
-        }
-
-        @Override
-        public void onBufferReceived(byte[] buffer) {
-        }
-
-        @Override
-        public void onEndOfSpeech() {
-        }
-
-        @Override
-        public void onError(int error) {
-            listening = false;
-            h.removeCallbacks(voiceWatchdog);
-            if (voiceHandled) return;
-            voiceHandled = true;
-            endVoiceUi();
-            if (lastPartial != null && !lastPartial.isEmpty()) {
-                runYouTubeSearch(lastPartial);
-                return;
-            }
-            if (error == android.speech.SpeechRecognizer.ERROR_NO_MATCH
-                    || error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                toast("Didn't catch that. Hold the mic, speak, then let go.");
-            } else if (error == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                toast("Microphone permission is needed for voice search");
-            } else if (error == android.speech.SpeechRecognizer.ERROR_NETWORK
-                    || error == android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
-                toast("Voice needs an internet connection");
-            } else {
-                nextVoiceEngine("failed (error " + error + ")");
-            }
-        }
-
-        @Override
-        public void onResults(Bundle results) {
-            listening = false;
-            h.removeCallbacks(voiceWatchdog);
-            java.util.ArrayList<String> r =
-                    results.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
-            String text = (r != null && !r.isEmpty()) ? r.get(0).trim() : null;
-            if (text == null || text.isEmpty()) text = lastPartial;
-            endVoiceUi();
-            if (voiceHandled) return;
-            voiceHandled = true;
-            if (text == null || text.isEmpty()) {
-                toast("Didn't catch that. Hold the mic, speak, then let go.");
-            } else {
-                runYouTubeSearch(text);
-            }
-        }
-
-        @Override
-        public void onPartialResults(Bundle partial) {
-            java.util.ArrayList<String> r =
-                    partial.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
-            if (r != null && !r.isEmpty() && !r.get(0).trim().isEmpty()) {
-                lastPartial = r.get(0).trim();
-                showVoiceBanner("“" + lastPartial + "”" + (micHeld ? "  let go to search" : "  searching…"));
-            }
-        }
-
-        @Override
-        public void onEvent(int eventType, Bundle params) {
-        }
-    };
 
     void showVoiceBanner(String text) {
         voiceBanner.setText(text);
@@ -848,6 +701,17 @@ public class MainActivity extends Activity {
     void endVoiceUi() {
         voiceBanner.setVisibility(View.GONE);
         micBtn.setFill(0xFFCC0000);
+    }
+
+    String voiceStatus() {
+        switch (voice.state()) {
+            case VoiceEngine.READY:
+                return "ready (offline, built in)";
+            case VoiceEngine.LOADING:
+                return "getting ready…";
+            default:
+                return "failed: " + voice.failReason();
+        }
     }
 
     @Override
@@ -864,7 +728,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (recognizer != null) recognizer.destroy();
+        if (voice != null) voice.stop();
         super.onDestroy();
     }
 
@@ -886,44 +750,570 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    /** SmartTube package names to try, best guess first. */
-    String[] smartTubeCandidates() {
-        List<String> out = new ArrayList<>();
-        String saved = prefs.getString("smartTubePkg", null);
-        if (saved != null) out.add(saved);
-        if (apps != null) {
-            for (FireTvClient.App a : apps) {
-                boolean known = false;
-                for (String k : FireTvClient.SMARTTUBE) if (k.equals(a.id)) known = true;
-                if ((known || (a.name != null && a.name.toLowerCase().contains("smarttube"))) && !out.contains(a.id)) {
-                    out.add(0, a.id);
+    // ---- SmartTube ---------------------------------------------------------------------
+
+    /** SmartTube as the Fire TV's app list reports it, if it's there. */
+    FireTvClient.App detectedSmartTube() {
+        if (apps == null) return null;
+        for (FireTvClient.App a : apps) if (FireTvClient.isSmartTube(a)) return a;
+        return null;
+    }
+
+    /** Package to use: the one picked in settings, else the detected one, else let the client guess. */
+    String smartTubePackage() {
+        String chosen = prefs.getString("smartTubeChosen", null);
+        if (chosen != null) return chosen;
+        FireTvClient.App a = detectedSmartTube();
+        return a == null ? null : a.id;
+    }
+
+    String smartTubeLabel() {
+        String chosen = prefs.getString("smartTubeChosen", null);
+        if (chosen != null) return prefs.getString("smartTubeChosenName", chosen) + " (picked)";
+        FireTvClient.App a = detectedSmartTube();
+        if (a != null) return a.name + " (found)";
+        return apps == null ? "checking…" : "not found, tap to pick";
+    }
+
+    void pickSmartTubeApp() {
+        if (!checkPaired()) return;
+        if (apps == null || apps.isEmpty()) {
+            toast("Getting the Fire TV's app list…");
+            ftv.loadApps((list, err) -> {
+                if (list != null && !list.isEmpty()) {
+                    apps = list;
+                    pickSmartTubeApp();
+                } else {
+                    toast("Couldn't get the app list from the Fire TV");
                 }
-            }
+            });
+            return;
         }
-        for (String k : FireTvClient.SMARTTUBE) if (!out.contains(k)) out.add(k);
-        return out.toArray(new String[0]);
+        List<FireTvClient.App> sorted = new ArrayList<>(apps);
+        sorted.sort((x, y) -> {
+            boolean a = FireTvClient.isSmartTube(x), b = FireTvClient.isSmartTube(y);
+            if (a != b) return a ? -1 : 1;
+            return x.name.compareToIgnoreCase(y.name);
+        });
+        String[] names = new String[sorted.size()];
+        for (int i = 0; i < names.length; i++) {
+            FireTvClient.App a = sorted.get(i);
+            names[i] = (FireTvClient.isSmartTube(a) ? "▶ " : "") + a.name + "\n" + a.id;
+        }
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Which app is SmartTube?")
+                .setItems(names, (d, w) -> {
+                    FireTvClient.App a = sorted.get(w);
+                    prefs.edit().putString("smartTubeChosen", a.id).putString("smartTubeChosenName", a.name).apply();
+                    toast("Voice search will use " + a.name);
+                })
+                .setNeutralButton("Auto-detect", (d, w) -> {
+                    prefs.edit().remove("smartTubeChosen").remove("smartTubeChosenName").apply();
+                    toast("SmartTube: " + smartTubeLabel());
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     void runYouTubeSearch(String q) {
         if (prefs.getBoolean("useSmartTube", true)) {
             Toast.makeText(this, "Searching SmartTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
-            ftv.smartTubeSearch(smartTubeCandidates(), q, (pkg, err) -> {
-                if (pkg != null) {
-                    prefs.edit().putString("smartTubePkg", pkg).apply();
-                    toast("Searched SmartTube for \"" + q + "\"");
-                } else {
+            ftv.smartTubeSearch(smartTubePackage(), q, (pkg, err) -> {
+                if (err != null) {
                     new AlertDialog.Builder(this, R.style.DialogTheme)
-                            .setTitle("SmartTube not found")
-                            .setMessage(err + ". Open SmartTube on the TV once, then try again. "
-                                    + "You can switch voice search to the YouTube app in the ⋮ menu.")
+                            .setTitle("SmartTube search")
+                            .setMessage(err)
                             .setPositiveButton("OK", null)
+                            .setNeutralButton("Pick SmartTube", (d, w) -> pickSmartTubeApp())
                             .show();
                 }
             });
         } else {
             Toast.makeText(this, "Searching YouTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
-            ftv.youtubeSearch(q, () -> toast("Searched YouTube for \"" + q + "\""));
+            ftv.youtubeSearch(q, (ok, err) -> {
+                if (err != null) toast(err);
+            });
         }
+    }
+
+    // ---- YouTube channel favourites (Channels tab) --------------------------------------
+
+    static class Channel {
+        String id = "", title = "";
+
+        String key() {
+            return id.isEmpty() ? "name:" + title.toLowerCase() : id;
+        }
+    }
+
+    static final long CHANNEL_HOLD_MS = 5000;
+    boolean channelsHoldFired;
+    long channelsHoldStart;
+    final Runnable channelsCountdown = new Runnable() {
+        @Override
+        public void run() {
+            long held = System.currentTimeMillis() - channelsHoldStart;
+            if (held >= CHANNEL_HOLD_MS) {
+                channelsHoldFired = true;
+                tabViews[2].setText("Channels");
+                buzz();
+                showChannelManager();
+                return;
+            }
+            long left = (CHANNEL_HOLD_MS - held + 999) / 1000;
+            tabViews[2].setText("Hold " + left + "…");
+            h.postDelayed(this, 250);
+        }
+    };
+
+    /** Tap Channels = show favourites. Hold 5 s = choose favourites. */
+    final View.OnTouchListener channelsHold = (v, e) -> {
+        switch (e.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                channelsHoldFired = false;
+                channelsHoldStart = System.currentTimeMillis();
+                h.postDelayed(channelsCountdown, 600);
+                return true;
+            case android.view.MotionEvent.ACTION_UP:
+                h.removeCallbacks(channelsCountdown);
+                tabViews[2].setText("Channels");
+                if (!channelsHoldFired) selectTab(2);
+                v.performClick();
+                return true;
+            case android.view.MotionEvent.ACTION_CANCEL:
+                h.removeCallbacks(channelsCountdown);
+                tabViews[2].setText("Channels");
+                return true;
+            default:
+                return true;
+        }
+    };
+
+    List<Channel> loadChannels() {
+        List<Channel> out = new ArrayList<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(prefs.getString("subs", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.getJSONObject(i);
+                Channel c = new Channel();
+                c.id = o.optString("id", "");
+                c.title = o.optString("title", "");
+                if (!c.title.isEmpty()) out.add(c);
+            }
+        } catch (Exception ignored) {
+        }
+        out.sort((a, b) -> a.title.compareToIgnoreCase(b.title));
+        return out;
+    }
+
+    void saveChannels(List<Channel> list) {
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (Channel c : list) {
+            try {
+                arr.put(new org.json.JSONObject().put("id", c.id).put("title", c.title));
+            } catch (Exception ignored) {
+            }
+        }
+        prefs.edit().putString("subs", arr.toString()).apply();
+    }
+
+    java.util.Set<String> loadFavKeys() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(prefs.getString("favChannels", "[]"));
+            for (int i = 0; i < arr.length(); i++) out.add(arr.getString(i));
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    void saveFavKeys(java.util.Set<String> keys) {
+        prefs.edit().putString("favChannels", new org.json.JSONArray(keys).toString()).apply();
+    }
+
+    List<Channel> favouriteChannels() {
+        java.util.Set<String> fav = loadFavKeys();
+        List<Channel> out = new ArrayList<>();
+        for (Channel c : loadChannels()) if (fav.contains(c.key())) out.add(c);
+        return out;
+    }
+
+    void buildChannelsRow() {
+        List<Channel> favs = favouriteChannels();
+        if (favs.isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText("Hold the Channels tab for 5 seconds to pick your favourite YouTube channels");
+            hint.setTextColor(DIM);
+            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            hint.setGravity(Gravity.CENTER);
+            hint.setPadding(dp(12), 0, dp(12), 0);
+            hint.setOnClickListener(v -> showChannelManager());
+            tabContent.addView(hint, new LinearLayout.LayoutParams(-1, -1));
+            return;
+        }
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        hs.addView(row);
+        tabContent.addView(hs, new LinearLayout.LayoutParams(-1, -1));
+        int[] palette = {0xFF8E24AA, 0xFF1E88E5, 0xFF00897B, 0xFFF4511E, 0xFF6D4C41, 0xFF3949AB, 0xFFC0CA33, 0xFFD81B60};
+        for (Channel c : favs) {
+            FrameLayout tile = new FrameLayout(this);
+            GradientDrawable g = new GradientDrawable();
+            g.setColor(palette[Math.abs(c.title.hashCode()) % palette.length]);
+            g.setCornerRadius(dp(18));
+            tile.setBackground(g);
+            tile.setClipToOutline(true);
+            tile.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(18));
+                }
+            });
+            LinearLayout inner = new LinearLayout(this);
+            inner.setGravity(Gravity.CENTER_VERTICAL);
+            inner.setPadding(dp(6), 0, dp(8), 0);
+            ImageView avatar = new ImageView(this);
+            avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            avatar.setClipToOutline(true);
+            avatar.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setOval(0, 0, view.getWidth(), view.getHeight());
+                }
+            });
+            avatar.setVisibility(View.GONE);
+            inner.addView(avatar, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            TextView tv = new TextView(this);
+            tv.setText(c.title);
+            tv.setTextColor(0xFFFFFFFF);
+            tv.setTypeface(null, Typeface.BOLD);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.title.length() > 14 ? 12 : 14);
+            tv.setMaxLines(2);
+            tv.setEllipsize(TextUtils.TruncateAt.END);
+            tv.setPadding(dp(6), 0, 0, 0);
+            inner.addView(tv, new LinearLayout.LayoutParams(-1, -2));
+            tile.addView(inner, new FrameLayout.LayoutParams(-1, -1));
+            loadAvatar(c, avatar);
+            tile.setOnClickListener(v -> {
+                buzz();
+                openChannel(c);
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(150), dp(62));
+            lp.setMargins(dp(5), 0, dp(5), 0);
+            row.addView(tile, lp);
+        }
+    }
+
+    void openChannel(Channel c) {
+        if (!checkPaired()) return;
+        runYouTubeSearch(c.title);
+    }
+
+    final java.util.concurrent.ExecutorService avatarExec = java.util.concurrent.Executors.newFixedThreadPool(2);
+
+    /** Best effort: channel picture from the public channel page, cached. */
+    void loadAvatar(Channel c, ImageView into) {
+        if (c.id.isEmpty()) return;
+        String cachedUrl = prefs.getString("avatar_" + c.id, null);
+        if (cachedUrl != null && !cachedUrl.isEmpty()) {
+            showAvatar(cachedUrl, into);
+            return;
+        }
+        if (cachedUrl != null) return; // looked before, none found
+        avatarExec.execute(() -> {
+            String found = "";
+            try {
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                        new java.net.URL("https://www.youtube.com/channel/" + c.id).openConnection();
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(8000);
+                conn.setRequestProperty("User-Agent",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+                conn.setRequestProperty("Accept-Language", "en-GB,en;q=0.9");
+                conn.setRequestProperty("Cookie", "SOCS=CAI; CONSENT=YES+1");
+                try (java.io.InputStream in = conn.getInputStream()) {
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    byte[] b = new byte[16384];
+                    int n;
+                    java.util.regex.Pattern pat = java.util.regex.Pattern.compile(
+                            "<meta property=\"og:image\" content=\"([^\"]+)\"");
+                    while ((n = in.read(b)) > 0 && bo.size() < 800000) {
+                        bo.write(b, 0, n);
+                        java.util.regex.Matcher m = pat.matcher(bo.toString("UTF-8"));
+                        if (m.find()) {
+                            found = m.group(1).replace("&amp;", "&");
+                            break;
+                        }
+                    }
+                }
+                conn.disconnect();
+            } catch (Exception ignored) {
+            }
+            final String url = found;
+            h.post(() -> {
+                prefs.edit().putString("avatar_" + c.id, url).apply();
+                if (!url.isEmpty()) showAvatar(url, into);
+            });
+        });
+    }
+
+    void showAvatar(String url, ImageView into) {
+        Bitmap cached = iconCache.get(url);
+        if (cached != null) {
+            into.setImageBitmap(cached);
+            into.setVisibility(View.VISIBLE);
+            return;
+        }
+        ftv.loadBitmap(url, (bmp, err) -> {
+            iconCache.put(url, bmp);
+            into.setImageBitmap(bmp);
+            into.setVisibility(View.VISIBLE);
+        });
+    }
+
+    /** Tick list of subscriptions; ticked ones show in the Channels tab. */
+    void showChannelManager() {
+        List<Channel> all = loadChannels();
+        if (all.isEmpty()) {
+            new AlertDialog.Builder(this, R.style.DialogTheme)
+                    .setTitle("Your YouTube channels")
+                    .setMessage("Bring in your YouTube subscriptions once (a file from Google Takeout), "
+                            + "or add channels by name. Then tick your favourites and they'll show in the Channels tab.")
+                    .setPositiveButton("Import subscriptions", (d, w) -> startImport())
+                    .setNeutralButton("How to get the file", (d, w) -> showTakeoutHelp())
+                    .setNegativeButton("Add by name", (d, w) -> askAddChannel())
+                    .show();
+            return;
+        }
+        java.util.Set<String> fav = loadFavKeys();
+        String[] names = new String[all.size()];
+        boolean[] checked = new boolean[all.size()];
+        for (int i = 0; i < all.size(); i++) {
+            names[i] = all.get(i).title;
+            checked[i] = fav.contains(all.get(i).key());
+        }
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Tick your favourite channels")
+                .setMultiChoiceItems(names, checked, (d, w, isChecked) -> checked[w] = isChecked)
+                .setPositiveButton("Save", (d, w) -> {
+                    java.util.Set<String> keys = new java.util.HashSet<>();
+                    for (int i = 0; i < all.size(); i++) if (checked[i]) keys.add(all.get(i).key());
+                    saveFavKeys(keys);
+                    selectTab(2);
+                    toast(keys.size() + " favourite channel" + (keys.size() == 1 ? "" : "s"));
+                })
+                .setNeutralButton("Import / add…", (d, w) -> new AlertDialog.Builder(this, R.style.DialogTheme)
+                        .setItems(new String[]{"Import subscriptions file", "Add a channel by name",
+                                "How to get the subscriptions file"}, (d2, w2) -> {
+                            if (w2 == 0) startImport();
+                            else if (w2 == 1) askAddChannel();
+                            else showTakeoutHelp();
+                        })
+                        .show())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    void showTakeoutHelp() {
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Get your subscriptions file")
+                .setMessage("1. Open takeout.google.com (button below) signed in with your YouTube account.\n"
+                        + "2. Tap Deselect all, then tick \"YouTube and YouTube Music\".\n"
+                        + "3. Tap \"All YouTube data included\", untick everything except \"subscriptions\", OK.\n"
+                        + "4. Next step > Create export. Google emails you a link, usually within minutes.\n"
+                        + "5. Download the zip to this phone, come back here and choose Import. "
+                        + "Pick the zip itself, no need to unzip it.")
+                .setPositiveButton("Open Takeout", (d, w) -> {
+                    try {
+                        startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse("https://takeout.google.com/")));
+                    } catch (Exception e) {
+                        toast("No browser found");
+                    }
+                })
+                .setNeutralButton("Import now", (d, w) -> startImport())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    void startImport() {
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        try {
+            startActivityForResult(i, REQ_IMPORT);
+        } catch (Exception e) {
+            toast("No file picker available");
+        }
+    }
+
+    void askAddChannel() {
+        EditText et = new EditText(this);
+        et.setSingleLine(true);
+        et.setHint("Channel name or @handle");
+        LinearLayout box = new LinearLayout(this);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(et, new LinearLayout.LayoutParams(-1, -2));
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Add a channel")
+                .setView(box)
+                .setPositiveButton("Add", (d, w) -> {
+                    String t = et.getText().toString().trim();
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("youtube\\.com/(@[^/?#]+)").matcher(t);
+                    if (m.find()) t = m.group(1);
+                    if (t.isEmpty()) return;
+                    List<Channel> all = loadChannels();
+                    Channel c = new Channel();
+                    c.title = t;
+                    for (Channel x : all) if (x.key().equals(c.key())) return;
+                    all.add(c);
+                    saveChannels(all);
+                    java.util.Set<String> fav = loadFavKeys();
+                    fav.add(c.key());
+                    saveFavKeys(fav);
+                    selectTab(2);
+                    toast("Added " + t + " to favourites");
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_IMPORT || resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        android.net.Uri uri = data.getData();
+        new Thread(() -> {
+            String err = null;
+            List<Channel> imported = new ArrayList<>();
+            try {
+                byte[] bytes;
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    byte[] b = new byte[65536];
+                    int n;
+                    while ((n = in.read(b)) > 0 && bo.size() < 200_000_000) bo.write(b, 0, n);
+                    bytes = bo.toByteArray();
+                }
+                List<String> csvs = new ArrayList<>();
+                if (bytes.length > 1 && bytes[0] == 'P' && bytes[1] == 'K') {
+                    try (java.util.zip.ZipInputStream zin =
+                                 new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))) {
+                        java.util.zip.ZipEntry ze;
+                        while ((ze = zin.getNextEntry()) != null) {
+                            String name = ze.getName().toLowerCase();
+                            if (!ze.isDirectory() && name.endsWith(".csv")) {
+                                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                                byte[] b = new byte[65536];
+                                int n;
+                                while ((n = zin.read(b)) > 0) bo.write(b, 0, n);
+                                String text = bo.toString("UTF-8");
+                                if (name.contains("subscri")) csvs.add(0, text);
+                                else csvs.add(text);
+                            }
+                        }
+                    }
+                } else {
+                    csvs.add(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+                }
+                for (String csv : csvs) {
+                    imported = parseSubscriptionsCsv(csv);
+                    if (!imported.isEmpty()) break;
+                }
+                if (imported.isEmpty()) err = "Couldn't find any channels in that file. Pick the Takeout zip or subscriptions.csv.";
+            } catch (Exception e) {
+                err = "Couldn't read that file: " + e.getMessage();
+            }
+            final String fErr = err;
+            final List<Channel> fImported = imported;
+            h.post(() -> {
+                if (fErr != null) {
+                    toast(fErr);
+                    return;
+                }
+                List<Channel> all = loadChannels();
+                java.util.Set<String> have = new java.util.HashSet<>();
+                for (Channel c : all) have.add(c.key());
+                int added = 0;
+                for (Channel c : fImported) {
+                    if (have.add(c.key())) {
+                        all.add(c);
+                        added++;
+                    }
+                }
+                saveChannels(all);
+                toast("Imported " + added + " channel" + (added == 1 ? "" : "s") + ". Now tick your favourites.");
+                showChannelManager();
+            });
+        }, "import-subs").start();
+    }
+
+    /** Takeout subscriptions.csv: "Channel Id,Channel Url,Channel Title" (quoted fields allowed). */
+    static List<Channel> parseSubscriptionsCsv(String csv) {
+        List<Channel> out = new ArrayList<>();
+        if (csv.startsWith("\uFEFF")) csv = csv.substring(1);
+        List<List<String>> rows = new ArrayList<>();
+        List<String> row = new ArrayList<>();
+        StringBuilder cell = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < csv.length(); i++) {
+            char ch = csv.charAt(i);
+            if (quoted) {
+                if (ch == '"') {
+                    if (i + 1 < csv.length() && csv.charAt(i + 1) == '"') {
+                        cell.append('"');
+                        i++;
+                    } else {
+                        quoted = false;
+                    }
+                } else {
+                    cell.append(ch);
+                }
+            } else if (ch == '"') {
+                quoted = true;
+            } else if (ch == ',') {
+                row.add(cell.toString());
+                cell.setLength(0);
+            } else if (ch == '\n' || ch == '\r') {
+                if (ch == '\r' && i + 1 < csv.length() && csv.charAt(i + 1) == '\n') i++;
+                row.add(cell.toString());
+                cell.setLength(0);
+                rows.add(row);
+                row = new ArrayList<>();
+            } else {
+                cell.append(ch);
+            }
+        }
+        if (cell.length() > 0 || !row.isEmpty()) {
+            row.add(cell.toString());
+            rows.add(row);
+        }
+        if (rows.isEmpty()) return out;
+        int idCol = -1, titleCol = -1, urlCol = -1;
+        List<String> header = rows.get(0);
+        for (int c = 0; c < header.size(); c++) {
+            String hname = header.get(c).trim().toLowerCase();
+            if (hname.contains("id") && idCol < 0) idCol = c;
+            else if (hname.contains("url") && urlCol < 0) urlCol = c;
+            else if ((hname.contains("title") || hname.contains("name")) && titleCol < 0) titleCol = c;
+        }
+        if (titleCol < 0) return out;
+        for (int r = 1; r < rows.size(); r++) {
+            List<String> cols = rows.get(r);
+            if (cols.size() <= titleCol) continue;
+            Channel ch = new Channel();
+            ch.title = cols.get(titleCol).trim();
+            if (idCol >= 0 && cols.size() > idCol) ch.id = cols.get(idCol).trim();
+            if (ch.id.isEmpty() && urlCol >= 0 && cols.size() > urlCol) {
+                String u = cols.get(urlCol);
+                int k = u.indexOf("/channel/");
+                if (k >= 0) ch.id = u.substring(k + 9).replaceAll("[/?#].*", "");
+            }
+            if (!ch.title.isEmpty()) out.add(ch);
+        }
+        return out;
     }
 
     void inputPressed() {
@@ -1080,6 +1470,7 @@ public class MainActivity extends Activity {
         boolean useDpad = prefs.getBoolean("dpadMode", false);
         boolean vib = prefs.getBoolean("vibrate", true);
         boolean volKeys = prefs.getBoolean("volKeys", true);
+        boolean useSt = prefs.getBoolean("useSmartTube", true);
         String ip = prefs.getString("ip", null);
         String[] items = {
                 "Fire TV: " + (ftv.isPaired() ? prefs.getString("name", "Fire TV") + " (" + ip + ")" : "not paired"),
@@ -1088,10 +1479,11 @@ public class MainActivity extends Activity {
                 "Phone volume buttons change TV volume: " + (volKeys ? "On" : "Off"),
                 "TV IR codes: " + (ir.getCodeSet() == 0 ? "Set A" : "Set B") + "  (tap to test/change)",
                 "IR blaster: " + (ir.available() ? "found" : "NOT found"),
-                "Voice search app: " + (prefs.getBoolean("useSmartTube", true) ? "SmartTube" : "YouTube")
-                        + "  (tap to switch)",
-                "Voice engine: " + voiceEngineName(voiceEngineIndex()) + "  (tap to change)",
+                "Voice search opens: " + (useSt ? "SmartTube" : "YouTube app") + "  (tap to switch)",
+                "SmartTube app: " + smartTubeLabel(),
+                "Voice: " + voiceStatus(),
                 "Type a search instead of speaking…",
+                "YouTube channels (same as holding Channels)…",
         };
         new AlertDialog.Builder(this, R.style.DialogTheme)
                 .setTitle("Remote settings")
@@ -1114,14 +1506,16 @@ public class MainActivity extends Activity {
                             showIrSetPicker();
                             break;
                         case 6:
-                            prefs.edit().putBoolean("useSmartTube", !prefs.getBoolean("useSmartTube", true)).apply();
+                            prefs.edit().putBoolean("useSmartTube", !useSt).apply();
                             break;
                         case 7:
-                            prefs.edit().putInt("voiceEngine", voiceEngineIndex() + 1).apply();
-                            toast("Voice engine: " + voiceEngineName(voiceEngineIndex()));
+                            pickSmartTubeApp();
                             break;
-                        case 8:
+                        case 9:
                             if (checkPaired()) askYouTubeTyped();
+                            break;
+                        case 10:
+                            showChannelManager();
                             break;
                         default:
                             break;

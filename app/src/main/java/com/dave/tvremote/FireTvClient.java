@@ -186,105 +186,192 @@ public class FireTvClient {
 
     public static final String YOUTUBE = "com.amazon.firetv.youtube";
 
-    /**
-     * Opens YouTube on the Fire TV, moves to its Search page and types the query.
-     * There is no direct search command in the Fire TV API, so this drives the screen like a remote.
-     */
-    public void youtubeSearch(String query, Runnable onTyped) {
-        submit(() -> {
-            post("/v1/FireTV?action=home", null);  // leave any playing video first
-            sleep(1200);
-            post("/v1/FireTV/app/" + YOUTUBE, null);
-            sleep(7000);                            // YouTube takes a few seconds to load
-            post("/v1/FireTV?action=dpad_left", null); // open the side menu
-            sleep(700);
-            for (int i = 0; i < 6; i++) {           // Search is the top item
-                post("/v1/FireTV?action=dpad_up", null);
-                sleep(250);
-            }
-            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyDown\"}");
-            sleep(150);
-            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
-            sleep(1800);
-            for (int i = 0; i < query.length(); ) {
-                int cp = query.codePointAt(i);
-                i += Character.charCount(cp);
-                JSONObject o = new JSONObject();
-                try {
-                    o.put("text", new String(Character.toChars(cp)));
-                } catch (Exception ignored) {
-                }
-                post("/v1/FireTV/text", o.toString());
-            }
-            if (onTyped != null) main.post(onTyped);
-        });
-    }
-
     /** Known SmartTube package names, newest first. */
     public static final String[] SMARTTUBE = {
             "org.smarttube.stable", "org.smarttube.beta", "app.smarttube.fdroid", "app.smarttube",
             "com.teamsmart.videomanager.tv", "com.liskovsoft.smarttubetv.beta", "com.liskovsoft.smarttubetv"
     };
 
+    /** True if this app-list entry looks like SmartTube. */
+    public static boolean isSmartTube(App a) {
+        if (a == null) return false;
+        for (String k : SMARTTUBE) if (k.equals(a.id)) return true;
+        String n = a.name == null ? "" : a.name.toLowerCase().replace(" ", "");
+        String id = a.id == null ? "" : a.id.toLowerCase();
+        return n.contains("smarttube") || id.contains("smarttube");
+    }
+
+    interface Step {
+        void run() throws IOException, AuthException;
+    }
+
     /**
-     * SmartTube: bring it to the front (it resumes where it was, no Home press), jump to Search
-     * at the top of its side menu, type the words, then press Enter to run the search.
+     * A multi-step sequence (open app, move, type). The stick is woken once at the start;
+     * after that each step is retried on its own, so a slow reply never restarts the whole thing.
      */
-    public void smartTubeSearch(String[] packages, String query, Callback<String> done) {
-        submit(() -> {
-            // Ask the Fire TV which SmartTube it actually has, so we never open the wrong app
-            List<String> order = new ArrayList<>();
+    private void submitMacro(Step steps, Callback<String> done) {
+        if (!isPaired()) {
+            setState(ST_UNPAIRED, "Pair your Fire TV first: tap the name at the top");
+            return;
+        }
+        if (waking) return;
+        pending.incrementAndGet();
+        exec.execute(() -> {
+            String err = null;
             try {
-                Resp list = request("GET", base(ip) + "/v1/FireTV/appsV2", null, true, 1500, 5000);
-                JSONArray arr = new JSONArray(list.body);
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject o = arr.getJSONObject(i);
-                    String id = o.optString("appId", "");
-                    String name = o.optString("name", "").toLowerCase();
-                    boolean known = false;
-                    for (String k : SMARTTUBE) if (k.equals(id)) known = true;
-                    if (!id.isEmpty() && (known || name.contains("smarttube") || name.contains("smart tube"))) {
-                        order.add(id);
+                if (!awake()) {
+                    waking = true;
+                    setState(ST_WAKING, "Waking Fire TV…");
+                    boolean up;
+                    try {
+                        up = wake(25000);
+                    } finally {
+                        waking = false;
                     }
+                    if (!up) throw new IOException("Can't reach the Fire TV");
                 }
+                steps.run();
+                setState(ST_OK, null);
+            } catch (AuthException e) {
+                err = "Fire TV didn't accept this phone. Pair again from the menu.";
+                setState(ST_UNPAIRED, null);
+            } catch (IOException e) {
+                err = "Lost contact with the Fire TV part-way through. Try again.";
+            } catch (Exception e) {
+                err = e.getMessage();
+            } finally {
+                pending.decrementAndGet();
+            }
+            final String fErr = err;
+            if (done != null) main.post(() -> done.done(fErr == null ? "ok" : null, fErr));
+        });
+    }
+
+    private boolean awake() {
+        try {
+            request("GET", base(ip) + "/v1/FireTV/status", null, true, 1200, 1500);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** One step, tried twice before giving up. */
+    private void step(String path, String body) throws IOException, AuthException {
+        try {
+            post(path, body);
+        } catch (IOException first) {
+            sleep(400);
+            post(path, body);
+        }
+    }
+
+    private void stepSelect() throws IOException, AuthException {
+        step("/v1/FireTV?action=select", "{\"keyActionType\":\"keyDown\"}");
+        sleep(150);
+        step("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
+    }
+
+    /**
+     * Opens YouTube on the Fire TV, moves to its Search page and types the query.
+     */
+    public void youtubeSearch(String query, Callback<String> done) {
+        submitMacro(() -> {
+            step("/v1/FireTV?action=home", null);
+            sleep(1200);
+            step("/v1/FireTV/app/" + YOUTUBE, null);
+            sleep(7000);
+            step("/v1/FireTV?action=dpad_left", null);
+            sleep(700);
+            for (int i = 0; i < 6; i++) {
+                step("/v1/FireTV?action=dpad_up", null);
+                sleep(250);
+            }
+            stepSelect();
+            sleep(1800);
+            typeChars(query);
+        }, done);
+    }
+
+    /**
+     * SmartTube: bring it to the front, select the search button at the top of its side menu,
+     * type the words, press Enter. Package: the one chosen in settings, else the one the
+     * Fire TV's app list says is installed, else the known names.
+     */
+    public void smartTubeSearch(String chosenPkg, String query, Callback<String> done) {
+        final String[] used = {null};
+        submitMacro(() -> {
+            List<String> order = new ArrayList<>();
+            if (chosenPkg != null && !chosenPkg.isEmpty()) order.add(chosenPkg);
+            try {
+                for (App a : fetchApps()) if (isSmartTube(a) && !order.contains(a.id)) order.add(a.id);
             } catch (Exception ignored) {
             }
-            for (String p : packages) if (!order.contains(p)) order.add(p);
-            String used = null;
+            for (String k : SMARTTUBE) if (!order.contains(k)) order.add(k);
             for (String pkg : order) {
                 Resp r = request("POST", base(ip) + "/v1/FireTV/app/" + pkg, "", true, 1500, 4000);
                 if (r.code == 401 || r.code == 403) throw new AuthException(r.body);
                 String desc = "";
                 try {
-                    desc = new JSONObject(r.body).optString("description", "");
+                    desc = new JSONObject(r.body).optString("description", "").toLowerCase();
                 } catch (Exception ignored) {
                 }
-                if (r.code >= 200 && r.code < 300 && !desc.toLowerCase().contains("not")) {
-                    used = pkg;
+                if (r.code >= 200 && r.code < 300 && !desc.contains("not") && !desc.contains("fail")) {
+                    used[0] = pkg;
                     break;
                 }
             }
-            if (used == null) {
-                main.post(() -> done.done(null, "SmartTube isn't installed on this Fire TV (or uses a name I don't know)"));
-                return;
+            if (used[0] == null) {
+                throw new IllegalStateException("SmartTube wasn't found on the Fire TV. Pick it in ⋮ > SmartTube app.");
             }
-            sleep(3000);                               // quick if already open, allows a cold start
-            post("/v1/FireTV?action=dpad_left", null); // into the side menu
+            sleep(3000);                                   // quick if already open, allows a cold start
+            step("/v1/FireTV?action=dpad_left", null);     // into the side menu
             sleep(600);
-            for (int i = 0; i < 10; i++) {             // Search sits at the top
-                post("/v1/FireTV?action=dpad_up", null);
-                sleep(220);
+            for (int i = 0; i < 12; i++) {                 // search button sits above the menu
+                step("/v1/FireTV?action=dpad_up", null);
+                sleep(200);
             }
-            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyDown\"}");
-            sleep(150);
-            post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
-            sleep(1500);
+            stepSelect();
+            sleep(1600);                                   // search screen opens with the box focused
             typeChars(query);
             sleep(500);
-            typeChars("\n");                          // Enter runs the search in SmartTube
-            final String fUsed = used;
-            main.post(() -> done.done(fUsed, null));
+            typeChars("\n");                              // Enter runs the search
+        }, (ok, err) -> {
+            if (done != null) done.done(ok != null ? used[0] : null, err);
         });
+    }
+
+    /** Installed, launchable apps from the Fire TV (blocking; call off the main thread). */
+    private List<App> fetchApps() throws Exception {
+        List<App> list = new ArrayList<>();
+        Resp r = request("GET", base(ip) + "/v1/FireTV/appsV2", null, true, 2500, 6000);
+        if (r.code != 200) r = request("GET", base(ip) + "/v1/FireTV/apps", null, true, 2500, 6000);
+        Object parsed = new org.json.JSONTokener(r.body).nextValue();
+        JSONArray arr = null;
+        if (parsed instanceof JSONArray) {
+            arr = (JSONArray) parsed;
+        } else if (parsed instanceof JSONObject) {
+            JSONObject o = (JSONObject) parsed;
+            for (String k : new String[]{"apps", "appsV2", "result"}) {
+                if (o.optJSONArray(k) != null) {
+                    arr = o.optJSONArray(k);
+                    break;
+                }
+            }
+        }
+        if (arr == null) return list;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o == null) continue;
+            if (o.optBoolean("isShortcutApp", false)) continue;        // launcher tiles, can't be started
+            if (o.has("isInstalled") && !o.optBoolean("isInstalled", true)) continue;
+            App a = new App();
+            a.id = o.optString("appId", o.optString("packageName", ""));
+            a.name = o.optString("name", a.id);
+            a.icon = o.optString("tvIconArt", null);
+            if (!a.id.isEmpty()) list.add(a);
+        }
+        return list;
     }
 
     private void typeChars(String text) throws IOException, AuthException {
@@ -530,23 +617,13 @@ public class FireTvClient {
             List<App> list = new ArrayList<>();
             String err = null;
             try {
-                Resp r = request("GET", base(ip) + "/v1/FireTV/appsV2", null, true, 2500, 6000);
-                if (r.code != 200) r = request("GET", base(ip) + "/v1/FireTV/apps", null, true, 2500, 6000);
-                JSONArray arr = new JSONArray(r.body);
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject o = arr.getJSONObject(i);
-                    if (o.has("isInstalled") && !o.optBoolean("isInstalled", true)) continue;
-                    App a = new App();
-                    a.id = o.optString("appId", o.optString("packageName", ""));
-                    a.name = o.optString("name", a.id);
-                    a.icon = o.optString("tvIconArt", o.optString("iconArtSmallUri", null));
-                    if (!a.id.isEmpty()) list.add(a);
-                }
+                list = fetchApps();
             } catch (Exception e) {
                 err = e.toString();
             }
+            final List<App> fList = list;
             final String fErr = list.isEmpty() ? (err == null ? "no apps" : err) : null;
-            main.post(() -> cb.done(list, fErr));
+            main.post(() -> cb.done(fList, fErr));
         });
     }
 

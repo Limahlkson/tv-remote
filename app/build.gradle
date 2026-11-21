@@ -14,6 +14,9 @@ android {
         targetSdk 34
         versionCode runNumber
         versionName "1.0.${runNumber}"
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
     }
 
     // Personal sideload key, kept in the repo so every build can update the last one.
@@ -45,4 +48,11 @@ android {
         abortOnError false
         checkReleaseBuilds false
     }
+}
+
+dependencies {
+    // Offline speech recognition (Vosk) with its small English model bundled
+    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+    implementation 'com.alphacephei:vosk-android:0.3.47@aar'
+    implementation 'com.alphacephei:vosk-model-en:0.3.47@aar'
 }
