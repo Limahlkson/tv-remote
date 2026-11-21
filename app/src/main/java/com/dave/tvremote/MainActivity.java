@@ -156,7 +156,7 @@ public class MainActivity extends Activity {
         float rr = dp(28);
         cardBg.setCornerRadii(new float[]{rr, rr, rr, rr, 0, 0, 0, 0});
         card.setBackground(cardBg);
-        card.setPadding(dp(14), dp(8), dp(14), dp(10));
+        card.setPadding(dp(14), dp(4), dp(14), dp(10));
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, 0, 1f);
         cardLp.topMargin = dp(10);
         root.addView(card, cardLp);
@@ -169,14 +169,14 @@ public class MainActivity extends Activity {
         handle.setBackground(hb);
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(dp(56), dp(5));
         hlp.gravity = Gravity.CENTER_HORIZONTAL;
-        hlp.bottomMargin = dp(6);
+        hlp.bottomMargin = dp(2);
         card.addView(handle, hlp);
 
         // header: sleep | name | menu
         FrameLayout header = new FrameLayout(this);
         Widgets.CircleButton moon = new Widgets.CircleButton(this, Icons.MOON, 0, TEXT).iconScale(0.5f)
                 .action(() -> ftvAction("sleep"), false);
-        header.addView(moon, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.START | Gravity.CENTER_VERTICAL));
+        header.addView(moon, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.START | Gravity.CENTER_VERTICAL));
 
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setGravity(Gravity.CENTER);
@@ -188,7 +188,7 @@ public class MainActivity extends Activity {
         titleRow.addView(statusDot, new LinearLayout.LayoutParams(dp(9), dp(9)));
         title = new TextView(this);
         title.setTextColor(BLUE);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setPadding(dp(8), 0, 0, 0);
@@ -201,8 +201,8 @@ public class MainActivity extends Activity {
 
         Widgets.CircleButton more = new Widgets.CircleButton(this, Icons.MORE, 0, TEXT).iconScale(0.5f)
                 .action(this::showSettings, false);
-        header.addView(more, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL));
-        card.addView(header, new LinearLayout.LayoutParams(-1, dp(52)));
+        header.addView(more, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.END | Gravity.CENTER_VERTICAL));
+        card.addView(header, new LinearLayout.LayoutParams(-1, dp(42)));
 
         // Media / Apps / Channels drawer
         LinearLayout drawer = new LinearLayout(this);
@@ -217,22 +217,22 @@ public class MainActivity extends Activity {
             TextView t = new TextView(this);
             t.setText(names[i]);
             t.setGravity(Gravity.CENTER);
-            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
             final int idx = i;
             t.setOnClickListener(v -> selectTab(idx));
             tabViews[i] = t;
-            tabs.addView(t, new LinearLayout.LayoutParams(0, dp(46), 1f));
+            tabs.addView(t, new LinearLayout.LayoutParams(0, dp(36), 1f));
         }
         drawer.addView(tabs);
         tabViews[2].setOnClickListener(null);
         tabViews[2].setOnTouchListener(channelsHold);
         tabContent = new LinearLayout(this);
         tabContent.setGravity(Gravity.CENTER_VERTICAL);
-        tabContent.setPadding(dp(8), dp(4), dp(8), dp(10));
-        drawer.addView(tabContent, new LinearLayout.LayoutParams(-1, dp(76)));
+        tabContent.setPadding(dp(6), dp(2), dp(6), dp(6));
+        drawer.addView(tabContent, new LinearLayout.LayoutParams(-1, dp(58)));
         LinearLayout.LayoutParams drLp = new LinearLayout.LayoutParams(-1, -2);
-        drLp.topMargin = dp(4);
-        drLp.bottomMargin = dp(8);
+        drLp.topMargin = dp(2);
+        drLp.bottomMargin = dp(4);
         card.addView(drawer, drLp);
         selectTab(prefs.getInt("tab", 1));
 
@@ -299,9 +299,6 @@ public class MainActivity extends Activity {
         comLp.topMargin = micLp.topMargin + side + dp(10);
         comLp.setMarginEnd(columnEnd);
         padArea.addView(comments, comLp);
-        backBtn = new Widgets.CircleButton(this, Icons.BACK, BTN, TEXT).ring(CARD, ring).iconScale(0.36f)
-                .action(this::backPressed, false);
-        padArea.addView(backBtn, cornerLp(corner + dp(8), Gravity.BOTTOM | Gravity.START));
         Widgets.CircleButton home = new Widgets.CircleButton(this, Icons.HOME, ORANGE, 0xFFFFFFFF).ring(CARD, ring)
                 .iconScale(0.36f).action(this::homePressed, false);
         padArea.addView(home, cornerLp(corner + dp(6), Gravity.BOTTOM | Gravity.END));
@@ -329,6 +326,18 @@ public class MainActivity extends Activity {
             mlp.bottomMargin = dp(fromBottom - small / 2f);
             padArea.addView(mb, mlp);
         }
+
+        // Back sits on the right, straight above fast forward
+        float backSize = 52;
+        float ffFromBottom = homeCentre + arc;              // fast forward is directly above Home
+        float backFromBottom = ffFromBottom + small / 2f + 10 + backSize / 2f;
+        backBtn = new Widgets.CircleButton(this, Icons.BACK, BTN, TEXT).iconScale(0.36f)
+                .action(this::backPressed, false);
+        FrameLayout.LayoutParams backLp = new FrameLayout.LayoutParams(dp(backSize), dp(backSize),
+                Gravity.BOTTOM | Gravity.END);
+        backLp.setMarginEnd(dp(homeCentre - backSize / 2f));
+        backLp.bottomMargin = dp(backFromBottom - backSize / 2f);
+        padArea.addView(backBtn, backLp);
         LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(-1, 0, 1f);
         padLp.topMargin = dp(14);
         card.addView(padArea, padLp);
@@ -546,7 +555,7 @@ public class MainActivity extends Activity {
             tv.setText(t[1]);
             tv.setTextColor(android.graphics.Color.parseColor(t[3]));
             tv.setTypeface(null, Typeface.BOLD);
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, t[1].length() > 11 ? 12 : 15);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, t[1].length() > 11 ? 11 : 14);
             tv.setGravity(Gravity.CENTER);
             tv.setMaxLines(2);
             tv.setPadding(dp(6), 0, dp(6), 0);
@@ -571,7 +580,7 @@ public class MainActivity extends Activity {
                 buzz();
                 ftvCall(() -> ftv.launchApp(pkg));
             }, hs, "order_apps");
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(118), dp(62));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(104), dp(48));
             lp.setMargins(dp(5), 0, dp(5), 0);
             row.addView(tile, lp);
         }
@@ -663,7 +672,7 @@ public class MainActivity extends Activity {
         g.setCornerRadius(dp(18));
         done.setBackground(g);
         done.setOnClickListener(v -> stopEditMode(true));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(84), dp(48));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(76), dp(40));
         lp.setMargins(dp(8), 0, dp(8), 0);
         row.addView(done, lp);
         doneChip = done;
@@ -1262,12 +1271,12 @@ public class MainActivity extends Activity {
                 }
             });
             avatar.setVisibility(View.GONE);
-            inner.addView(avatar, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            inner.addView(avatar, new LinearLayout.LayoutParams(dp(32), dp(32)));
             TextView tv = new TextView(this);
             tv.setText(c.title);
             tv.setTextColor(0xFFFFFFFF);
             tv.setTypeface(null, Typeface.BOLD);
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.title.length() > 14 ? 12 : 14);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.title.length() > 14 ? 11 : 13);
             tv.setMaxLines(2);
             tv.setEllipsize(TextUtils.TruncateAt.END);
             tv.setPadding(dp(6), 0, 0, 0);
@@ -1278,7 +1287,7 @@ public class MainActivity extends Activity {
                 buzz();
                 openChannel(c);
             }, hs, "order_channels");
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(150), dp(62));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(136), dp(48));
             lp.setMargins(dp(5), 0, dp(5), 0);
             row.addView(tile, lp);
         }
