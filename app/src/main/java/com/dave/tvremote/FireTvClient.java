@@ -140,7 +140,7 @@ public class FireTvClient {
     public void keyed(String action) {
         submit(() -> {
             post("/v1/FireTV?action=" + action, "{\"keyActionType\":\"keyDown\"}");
-            sleep(150);
+            sleep(80);
             try {
                 post("/v1/FireTV?action=" + action, "{\"keyActionType\":\"keyUp\"}");
             } catch (IOException e) {
@@ -261,14 +261,14 @@ public class FireTvClient {
         try {
             post(path, body);
         } catch (IOException first) {
-            sleep(400);
+            sleep(250);
             post(path, body);
         }
     }
 
     private void stepSelect() throws IOException, AuthException {
         step("/v1/FireTV?action=select", "{\"keyActionType\":\"keyDown\"}");
-        sleep(150);
+        sleep(80);
         step("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
     }
 
@@ -296,16 +296,16 @@ public class FireTvClient {
     private void openSmartTubeSteps(String chosenPkg, boolean launchFirst) throws IOException, AuthException {
         if (launchFirst) {
             launchSmartTube(chosenPkg);
-            sleep(2000);
+            sleep(1500);
         }
         step("/v1/FireTV?action=back", null);
-        sleep(900);
+        sleep(650);
         step("/v1/FireTV?action=dpad_up", null);
-        sleep(500);
+        sleep(300);
         stepSelect();
-        sleep(1300);
+        sleep(1000);
         stepSelect();
-        sleep(800);
+        sleep(450);
     }
 
     private void launchSmartTube(String chosenPkg) throws IOException, AuthException {
@@ -334,7 +334,7 @@ public class FireTvClient {
     /** Types into the focused search box, then presses Select to run the search. */
     private void typeAndSubmit(String text) throws IOException, AuthException {
         typeChars(text);
-        sleep(400);
+        sleep(250);
         stepSelect();
     }
 
@@ -433,7 +433,7 @@ public class FireTvClient {
             }
             if (thenSelect) {
                 post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyDown\"}");
-                sleep(150);
+                sleep(80);
                 post("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
             }
         });

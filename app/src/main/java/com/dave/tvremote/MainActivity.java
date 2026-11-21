@@ -2164,11 +2164,9 @@ public class MainActivity extends Activity {
         for (int i = 1; i < pos; i++) rights.append(" 22");
         String cmd = "f=$(dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'); "
                 + "case \"$f\" in *PlaybackActivity*) ;; *) echo NOVIDEO; exit;; esac; "
-                + "input keyevent 20; sleep 0.6; "
-                + "input keyevent" + keys + "; sleep 0.3; "
-                + (rights.length() > 0 ? "input keyevent" + rights + "; sleep 0.3; " : "")
-                + "input keyevent 19; sleep 0.3; input keyevent 19; sleep 0.4; "
-                + "input keyevent 23; echo DONE";
+                + "input keyevent 20; sleep 0.25; "                  // bring up the player controls
+                + "input keyevent" + keys + rights + " 19 19 23; "  // one burst: reset left, right, up, up, OK
+                + "echo DONE";
         showVoiceBanner("Opening comments…");
         adb.shell(ftv.getIp(), cmd, null, (out, err) -> {
             if (err != null) failed(err);

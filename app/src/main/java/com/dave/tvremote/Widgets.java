@@ -161,7 +161,7 @@ public final class Widgets {
                         h.postDelayed(longTask, 600);
                     } else if (onPress != null) {
                         onPress.run();
-                        if (repeat) repeater.start(onPress, 420, 170);
+                        if (repeat) repeater.start(onPress, 350, 120);
                     }
                     return true;
                 case MotionEvent.ACTION_UP:
@@ -244,7 +244,7 @@ public final class Widgets {
                     pressedHalf = right ? 1 : 0;
                     invalidate();
                     listener.onHalf(right);
-                    repeater.start(() -> listener.onHalf(right), 420, 170);
+                    repeater.start(() -> listener.onHalf(right), 350, 120);
                     return true;
                 }
                 case MotionEvent.ACTION_UP:
@@ -449,7 +449,7 @@ public final class Widgets {
                     if (h < 4) {
                         final int dir = h;
                         listener.onDirection(dir, false);
-                        repeater.start(() -> listener.onDirection(dir, true), 450, 220);
+                        repeater.start(() -> listener.onDirection(dir, true), 350, 150);
                     }
                     return true;
                 }
