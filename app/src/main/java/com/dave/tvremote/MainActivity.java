@@ -2136,7 +2136,11 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Comments button: open the comments of the SmartTube video that's playing. */
+    /**
+     * Comments button. SmartTube remembers the last player button you used, so first push the focus
+     * all the way left (play/pause), then step right to Chat/Comments and press OK.
+     * Default layout: play/pause, previous, next, repeat, speed, picture-in-picture, dimming, comments = 8th.
+     */
     void openComments() {
         if (!checkPaired()) return;
         buzz();
@@ -2144,15 +2148,37 @@ public class MainActivity extends Activity {
             failed("comments need the developer connection (⋮ > Direct links)");
             return;
         }
+        int pos = prefs.getInt("commentsPos", 8);
+        StringBuilder keys = new StringBuilder();
+        for (int i = 0; i < 12; i++) keys.append(" 21");
+        StringBuilder rights = new StringBuilder();
+        for (int i = 1; i < pos; i++) rights.append(" 22");
+        String cmd = "f=$(dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'); "
+                + "case \"$f\" in *PlaybackActivity*) ;; *) echo NOVIDEO; exit;; esac; "
+                + "input keyevent 20; sleep 0.6; "
+                + "input keyevent" + keys + "; sleep 0.3; "
+                + (rights.length() > 0 ? "input keyevent" + rights + "; sleep 0.3; " : "")
+                + "input keyevent 23; echo DONE";
         showVoiceBanner("Opening comments…");
-        String ip = ftv.getIp();
-        avatarExec.execute(() -> {
-            String err = TvScreen.openComments(adb, ip);
-            h.post(() -> {
-                if (err != null) failed(err);
-                else endVoiceUi();
-            });
+        adb.shell(ftv.getIp(), cmd, null, (out, err) -> {
+            if (err != null) failed(err);
+            else if (out != null && out.contains("NOVIDEO")) failed("play a video in SmartTube first");
+            else if (out == null || !out.contains("DONE")) failed("comments didn't open");
+            else endVoiceUi();
         });
+    }
+
+    void pickCommentsPosition() {
+        String[] opts = new String[12];
+        for (int i = 0; i < 12; i++) opts[i] = (i + 1) + (i == 7 ? "  (SmartTube default)" : "");
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Comments is which button along the player controls? (play/pause = 1)")
+                .setSingleChoiceItems(opts, prefs.getInt("commentsPos", 8) - 1, (d, w) -> {
+                    prefs.edit().putInt("commentsPos", w + 1).apply();
+                    d.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
 
@@ -2354,6 +2380,7 @@ public class MainActivity extends Activity {
                 "YouTube channels (same as holding Channels)…",
                 "Direct links to channels (ADB): " + (prefs.getBoolean("adbOk", false) ? "working" : "not connected yet")
                         + "  (tap for setup)",
+                "Comments button position in the player: " + prefs.getInt("commentsPos", 8),
         };
         new AlertDialog.Builder(this, R.style.DialogTheme)
                 .setTitle("Remote settings")
@@ -2389,6 +2416,9 @@ public class MainActivity extends Activity {
                             break;
                         case 11:
                             showAdbSetup();
+                            break;
+                        case 12:
+                            pickCommentsPosition();
                             break;
                         default:
                             break;
