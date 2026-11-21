@@ -159,6 +159,31 @@ public class FireTvClient {
         submit(() -> post("/v1/media?action=scan", body));
     }
 
+    private volatile long scanDownAt;
+
+    /**
+     * Rewind / fast forward as a real remote button: keyDown on press, keyUp on release.
+     * A tap skips (usually 10 s in Netflix, Prime, iPlayer), holding scrubs.
+     */
+    public void scanKey(boolean forward, boolean down) {
+        String body = "{\"direction\":\"" + (forward ? "forward" : "back")
+                + "\",\"keyAction\":{\"keyActionType\":\"" + (down ? "keyDown" : "keyUp") + "\"}}";
+        Cmd cmd = () -> {
+            if (down) {
+                scanDownAt = System.currentTimeMillis();
+            } else {
+                long held = System.currentTimeMillis() - scanDownAt;
+                if (held < 120) sleep(120 - held); // a real tap still has some length
+            }
+            post("/v1/media?action=scan", body);
+        };
+        if (down) {
+            submit(cmd);
+        } else {
+            submitAlways(cmd); // never drop a key release
+        }
+    }
+
     public void launchApp(String pkg) {
         submit(() -> post("/v1/FireTV/app/" + pkg, null));
     }
@@ -195,6 +220,19 @@ public class FireTvClient {
         exec.execute(() -> {
             try {
                 runWithWake(cmd);
+            } finally {
+                pending.decrementAndGet();
+            }
+        });
+    }
+
+    private void submitAlways(Cmd cmd) {
+        if (!isPaired()) return;
+        pending.incrementAndGet();
+        exec.execute(() -> {
+            try {
+                cmd.run();
+            } catch (Exception ignored) {
             } finally {
                 pending.decrementAndGet();
             }

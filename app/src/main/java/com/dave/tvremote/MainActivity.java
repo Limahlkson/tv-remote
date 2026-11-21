@@ -109,6 +109,12 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        scanSafety.run(); // let go of rewind / fast forward if the app is left mid-hold
+    }
+
+    @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (prefs.getBoolean("volKeys", true)
                 && (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
@@ -261,24 +267,25 @@ public class MainActivity extends Activity {
         padArea.addView(backBtn, cornerLp(corner + dp(8), Gravity.BOTTOM | Gravity.START));
         Widgets.CircleButton home = new Widgets.CircleButton(this, Icons.HOME, ORANGE, 0xFFFFFFFF).ring(CARD, ring)
                 .iconScale(0.36f).action(this::homePressed, false);
-        padArea.addView(home, cornerLp(corner + dp(24), Gravity.BOTTOM | Gravity.END));
+        padArea.addView(home, cornerLp(corner + dp(6), Gravity.BOTTOM | Gravity.END));
 
         // Rewind, play/pause and fast forward in an arc around Home
-        float homeSize = 74 + 24, homeCentre = homeSize / 2f - 10; // dp from the pad's bottom-right corner
-        float small = 52, arc = homeSize / 2f + small / 2f + 8;
+        float homeSize = 74 + 6, homeCentre = homeSize / 2f - 10; // dp from the pad's bottom-right corner
+        float small = 46, arc = homeSize / 2f + small / 2f + 8;
         int[] mediaIcons = {Icons.REWIND, Icons.PLAY_PAUSE, Icons.FFWD};
-        Runnable[] mediaActions = {
-                () -> ftvCall(() -> ftv.scan(false)),
+        Runnable[] mediaDown = {
+                () -> scanPress(false, true),
                 () -> ftvCall(ftv::playPause),
-                () -> ftvCall(() -> ftv.scan(true))
+                () -> scanPress(true, true)
         };
+        Runnable[] mediaUp = {() -> scanPress(false, false), null, () -> scanPress(true, false)};
         double[] angles = {180, 225, 270}; // left of Home, diagonal, above Home
         for (int i = 0; i < 3; i++) {
             double a = Math.toRadians(angles[i]);
             float fromRight = homeCentre - (float) (arc * Math.cos(a));
             float fromBottom = homeCentre - (float) (arc * Math.sin(a));
             Widgets.CircleButton mb = new Widgets.CircleButton(this, mediaIcons[i], BTN, TEXT)
-                    .iconScale(0.3f).action(mediaActions[i], false);
+                    .iconScale(0.3f).action(mediaDown[i], false).release(mediaUp[i]);
             FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(dp(small), dp(small),
                     Gravity.BOTTOM | Gravity.END);
             mlp.setMarginEnd(dp(fromRight - small / 2f));
@@ -381,9 +388,11 @@ public class MainActivity extends Activity {
         }
         tabContent.removeAllViews();
         if (i == 0) {
-            tabContent.addView(pill(Icons.REWIND, () -> ftvCall(() -> ftv.scan(false))), pillLp());
+            tabContent.addView(new PillButton(this, Icons.REWIND, () -> scanPress(false, true),
+                    () -> scanPress(false, false)), pillLp());
             tabContent.addView(pill(Icons.PLAY_PAUSE, () -> ftvCall(ftv::playPause)), pillLp());
-            tabContent.addView(pill(Icons.FFWD, () -> ftvCall(() -> ftv.scan(true))), pillLp());
+            tabContent.addView(new PillButton(this, Icons.FFWD, () -> scanPress(true, true),
+                    () -> scanPress(true, false)), pillLp());
         } else if (i == 1) {
             buildAppsRow();
         } else {
@@ -394,7 +403,7 @@ public class MainActivity extends Activity {
     }
 
     View pill(int icon, Runnable r) {
-        return new PillButton(this, icon, r);
+        return new PillButton(this, icon, r, null);
     }
 
     LinearLayout.LayoutParams pillLp() {
@@ -406,13 +415,14 @@ public class MainActivity extends Activity {
     /** Rounded rectangle button used in the drawer. */
     class PillButton extends View {
         final int icon;
-        final Runnable r;
+        final Runnable r, up;
         final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
 
-        PillButton(Context c, int icon, Runnable r) {
+        PillButton(Context c, int icon, Runnable r, Runnable up) {
             super(c);
             this.icon = icon;
             this.r = r;
+            this.up = up;
         }
 
         @Override
@@ -431,6 +441,7 @@ public class MainActivity extends Activity {
                 invalidate();
                 r.run();
             } else if (a == android.view.MotionEvent.ACTION_UP || a == android.view.MotionEvent.ACTION_CANCEL) {
+                if (up != null && isPressed()) up.run();
                 setPressed(false);
                 invalidate();
                 if (a == android.view.MotionEvent.ACTION_UP) performClick();
@@ -558,6 +569,32 @@ public class MainActivity extends Activity {
             if (checkPaired()) ftv.keyed("select");
         }
     };
+
+    boolean scanHeld;
+    boolean scanHeldForward;
+    final Runnable scanSafety = () -> {
+        if (scanHeld) {
+            scanHeld = false;
+            ftv.scanKey(scanHeldForward, false);
+        }
+    };
+
+    /** Rewind / fast forward behave like the physical remote: tap to skip, hold to scrub. */
+    void scanPress(boolean forward, boolean down) {
+        if (down) {
+            if (!checkPaired()) return;
+            buzz();
+            scanHeld = true;
+            scanHeldForward = forward;
+            ftv.scanKey(forward, true);
+            h.removeCallbacks(scanSafety);
+            h.postDelayed(scanSafety, 15000); // never leave the TV scrubbing
+        } else if (scanHeld) {
+            scanHeld = false;
+            h.removeCallbacks(scanSafety);
+            ftv.scanKey(forward, false);
+        }
+    }
 
     void inputPressed() {
         irPress(IrRemote.INPUT, false);

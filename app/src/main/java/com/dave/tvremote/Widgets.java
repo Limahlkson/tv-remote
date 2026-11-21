@@ -57,7 +57,7 @@ public final class Widgets {
         int icon, fill, iconColor, ringColor;
         float ringWidth, iconScale = 0.36f;
         String text;
-        Runnable onPress, onLongPress;
+        Runnable onPress, onLongPress, onRelease;
         boolean repeat;
         final Repeater repeater = new Repeater();
         final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -98,6 +98,11 @@ public final class Widgets {
         public CircleButton action(Runnable r, boolean repeat) {
             onPress = r;
             this.repeat = repeat;
+            return this;
+        }
+
+        public CircleButton release(Runnable r) {
+            onRelease = r;
             return this;
         }
 
@@ -169,6 +174,7 @@ public final class Widgets {
                 case MotionEvent.ACTION_CANCEL:
                     h.removeCallbacks(longTask);
                     repeater.stop();
+                    if (onRelease != null && isPressed()) onRelease.run();
                     setPressed(false);
                     invalidate();
                     return true;
