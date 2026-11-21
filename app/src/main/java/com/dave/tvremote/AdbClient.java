@@ -67,15 +67,13 @@ public class AdbClient {
                 String out = runShell(ip, command, onNeedApproval);
                 main.post(() -> cb.done(out, null));
             } catch (ConnectException e) {
-                main.post(() -> cb.done(null, "The Fire TV refused the connection. ADB debugging looks switched off "
-                        + "(Settings > My Fire TV > Developer options > ADB debugging)."));
+                main.post(() -> cb.done(null, "ADB debugging is off on the Fire TV"));
             } catch (NotAllowedException e) {
                 main.post(() -> cb.done(null, e.getMessage()));
             } catch (SocketTimeoutException e) {
-                main.post(() -> cb.done(null, "The Fire TV didn't answer in time. If it asked to allow debugging, "
-                        + "tick Always allow and press OK, then try again."));
+                main.post(() -> cb.done(null, "the Fire TV didn't answer (allow debugging on the TV?)"));
             } catch (Exception e) {
-                main.post(() -> cb.done(null, "ADB error: " + e.getMessage()));
+                main.post(() -> cb.done(null, "can't reach the Fire TV (" + e.getClass().getSimpleName() + ")"));
             }
         });
     }
@@ -105,7 +103,7 @@ public class AdbClient {
                     if (onNeedApproval != null) main.post(onNeedApproval);
                     s.setSoTimeout(90000);
                 } else {
-                    throw new NotAllowedException("The Fire TV didn't allow this phone. Try again and press OK on the TV prompt.");
+                    throw new NotAllowedException("the Fire TV didn't allow this phone");
                 }
             }
             s.setSoTimeout(8000);
