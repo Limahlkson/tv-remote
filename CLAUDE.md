@@ -14,8 +14,8 @@ Amazon's Fire TV remote and an IR remote for his Hisense TV. YouTube on the TV i
   (`showStatus` / `showVoiceBanner` green, `failed` red, TV-menu amber, `flash` short green).
 - When a TV-side route keeps failing, ask for **his manual remote sequence** and implement exactly
   that. His sequences have worked every time; my guesses often didn't.
-- Last version sent: **v1.0.24**. Comments button confirmed working.
-- Next build (not yet pushed when written): header status bar, new reorder, tile colours, swap button,
+- Last version sent: **v1.0.25**. Comments button confirmed working in v1.0.24.
+- v1.0.25 added (not yet confirmed by Dave): header status bar, new reorder, tile colours, swap button,
   share-to-add errors now visible (they were hidden by the 1.5 s toast throttle).
 
 ## Build
