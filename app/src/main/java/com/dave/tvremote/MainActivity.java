@@ -193,20 +193,35 @@ public class MainActivity extends Activity {
         header.addView(more, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL));
         card.addView(header, new LinearLayout.LayoutParams(-1, dp(52)));
 
-        // top row: TV power | Fire TV menu | Fire TV settings | TV input
-        LinearLayout top = new LinearLayout(this);
-        top.setGravity(Gravity.CENTER);
-        top.addView(labelled(new Widgets.CircleButton(this, Icons.POWER, RED, 0xFFFFFFFF).iconScale(0.34f)
-                .action(() -> irPress(IrRemote.POWER, false), false), "TV power"), weight());
-        top.addView(labelled(new Widgets.CircleButton(this, Icons.MENU, BTN, TEXT)
-                .action(() -> ftvAction("menu"), false), "Menu"), weight());
-        top.addView(labelled(new Widgets.CircleButton(this, Icons.GEAR, BTN, TEXT)
-                .action(this::openFireTvSettings, false), "Settings"), weight());
-        top.addView(labelled(new Widgets.CircleButton(this, Icons.INPUT, BTN, TEXT)
-                .action(this::inputPressed, false), "Input / AV"), weight());
-        LinearLayout.LayoutParams topLp = new LinearLayout.LayoutParams(-1, dp(96));
-        topLp.topMargin = dp(4);
-        card.addView(top, topLp);
+        // Media / Apps / Channels drawer
+        LinearLayout drawer = new LinearLayout(this);
+        drawer.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable db = new GradientDrawable();
+        db.setColor(0xFF353535);
+        db.setCornerRadius(dp(26));
+        drawer.setBackground(db);
+        LinearLayout tabs = new LinearLayout(this);
+        String[] names = {"Media", "Apps", "Channels"};
+        for (int i = 0; i < 3; i++) {
+            TextView t = new TextView(this);
+            t.setText(names[i]);
+            t.setGravity(Gravity.CENTER);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            final int idx = i;
+            t.setOnClickListener(v -> selectTab(idx));
+            tabViews[i] = t;
+            tabs.addView(t, new LinearLayout.LayoutParams(0, dp(46), 1f));
+        }
+        drawer.addView(tabs);
+        tabContent = new LinearLayout(this);
+        tabContent.setGravity(Gravity.CENTER_VERTICAL);
+        tabContent.setPadding(dp(8), dp(4), dp(8), dp(10));
+        drawer.addView(tabContent, new LinearLayout.LayoutParams(-1, dp(76)));
+        LinearLayout.LayoutParams drLp = new LinearLayout.LayoutParams(-1, -2);
+        drLp.topMargin = dp(4);
+        drLp.bottomMargin = dp(8);
+        card.addView(drawer, drLp);
+        selectTab(prefs.getInt("tab", 1));
 
         // TV-menu banner (shown after Input)
         banner = new TextView(this);
@@ -247,7 +262,9 @@ public class MainActivity extends Activity {
         Widgets.CircleButton home = new Widgets.CircleButton(this, Icons.HOME, ORANGE, 0xFFFFFFFF).ring(CARD, ring)
                 .iconScale(0.36f).action(this::homePressed, false);
         padArea.addView(home, cornerLp(corner + dp(24), Gravity.BOTTOM | Gravity.END));
-        card.addView(padArea, new LinearLayout.LayoutParams(-1, 0, 1f));
+        LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(-1, 0, 1f);
+        padLp.topMargin = dp(14);
+        card.addView(padArea, padLp);
 
         // TV volume and channel rockers (infrared)
         LinearLayout rockers = new LinearLayout(this);
@@ -258,42 +275,28 @@ public class MainActivity extends Activity {
                 right -> irPress(right ? IrRemote.CH_UP : IrRemote.CH_DOWN, true));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, -1, 1f);
         rlp.setMargins(dp(4), 0, dp(4), 0);
-        rockers.addView(vol, rlp);
+        rockers.addView(ch, rlp);
         LinearLayout.LayoutParams rlp2 = new LinearLayout.LayoutParams(0, -1, 1f);
         rlp2.setMargins(dp(4), 0, dp(4), 0);
-        rockers.addView(ch, rlp2);
+        rockers.addView(vol, rlp2);
         LinearLayout.LayoutParams rocLp = new LinearLayout.LayoutParams(-1, dp(58));
         rocLp.topMargin = dp(10);
         card.addView(rockers, rocLp);
 
-        // Media / Apps / Channels drawer
-        LinearLayout drawer = new LinearLayout(this);
-        drawer.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable db = new GradientDrawable();
-        db.setColor(0xFF353535);
-        db.setCornerRadius(dp(26));
-        drawer.setBackground(db);
-        LinearLayout tabs = new LinearLayout(this);
-        String[] names = {"Media", "Apps", "Channels"};
-        for (int i = 0; i < 3; i++) {
-            TextView t = new TextView(this);
-            t.setText(names[i]);
-            t.setGravity(Gravity.CENTER);
-            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-            final int idx = i;
-            t.setOnClickListener(v -> selectTab(idx));
-            tabViews[i] = t;
-            tabs.addView(t, new LinearLayout.LayoutParams(0, dp(46), 1f));
-        }
-        drawer.addView(tabs);
-        tabContent = new LinearLayout(this);
-        tabContent.setGravity(Gravity.CENTER_VERTICAL);
-        tabContent.setPadding(dp(8), dp(4), dp(8), dp(10));
-        drawer.addView(tabContent, new LinearLayout.LayoutParams(-1, dp(76)));
-        LinearLayout.LayoutParams drLp = new LinearLayout.LayoutParams(-1, -2);
-        drLp.topMargin = dp(10);
-        card.addView(drawer, drLp);
-        selectTab(prefs.getInt("tab", 1));
+        // bottom row: Fire TV menu | Fire TV settings | TV input | TV power
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER);
+        top.addView(labelled(new Widgets.CircleButton(this, Icons.MENU, BTN, TEXT)
+                .action(() -> ftvAction("menu"), false), "Menu"), weight());
+        top.addView(labelled(new Widgets.CircleButton(this, Icons.GEAR, BTN, TEXT)
+                .action(this::openFireTvSettings, false), "Settings"), weight());
+        top.addView(labelled(new Widgets.CircleButton(this, Icons.INPUT, BTN, TEXT)
+                .action(this::inputPressed, false), "Input / AV"), weight());
+        top.addView(labelled(new Widgets.CircleButton(this, Icons.POWER, RED, 0xFFFFFFFF).iconScale(0.34f)
+                .action(() -> irPress(IrRemote.POWER, false), false), "TV power"), weight());
+        LinearLayout.LayoutParams topLp = new LinearLayout.LayoutParams(-1, dp(96));
+        topLp.topMargin = dp(10);
+        card.addView(top, topLp);
 
         return root;
     }
