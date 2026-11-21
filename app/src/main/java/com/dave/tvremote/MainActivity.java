@@ -2138,7 +2138,7 @@ public class MainActivity extends Activity {
 
     /**
      * Comments button. SmartTube remembers the last player button you used, so first push the focus
-     * all the way left (play/pause), then step right to Chat/Comments and press OK.
+     * all the way left, step right, then Up twice onto Chat/Comments (Dave's route) and press OK.
      * Default layout: play/pause, previous, next, repeat, speed, picture-in-picture, dimming, comments = 8th.
      */
     void openComments() {
@@ -2150,7 +2150,7 @@ public class MainActivity extends Activity {
         }
         int pos = prefs.getInt("commentsPos", 8);
         StringBuilder keys = new StringBuilder();
-        for (int i = 0; i < 12; i++) keys.append(" 21");
+        for (int i = 0; i < 9; i++) keys.append(" 21");
         StringBuilder rights = new StringBuilder();
         for (int i = 1; i < pos; i++) rights.append(" 22");
         String cmd = "f=$(dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'); "
@@ -2158,6 +2158,7 @@ public class MainActivity extends Activity {
                 + "input keyevent 20; sleep 0.6; "
                 + "input keyevent" + keys + "; sleep 0.3; "
                 + (rights.length() > 0 ? "input keyevent" + rights + "; sleep 0.3; " : "")
+                + "input keyevent 19; sleep 0.3; input keyevent 19; sleep 0.4; "
                 + "input keyevent 23; echo DONE";
         showVoiceBanner("Opening comments…");
         adb.shell(ftv.getIp(), cmd, null, (out, err) -> {
