@@ -21,7 +21,10 @@ Built for a vivo iQOO 12 Pro (has an IR blaster), Android 16.
 - Pressing **Input/AV** switches the pad into *TV menu mode* for 12 s (amber), so swipes, taps and
   Back go to the TV by IR to pick the source. Tap the banner or Home to leave.
 - Phone volume buttons change the TV volume by IR while the app is open (can be turned off).
-- **Voice search (red mic under Mute):** hold, talk, let go. Speech-to-text is offline inside the app
+- **Voice search (red mic under Mute):** tap = open the search box (SmartTube: sends "@", its own
+  open-search key, checks `/v1/FireTV/keyboard` for a steady change; else Back, Back, launch, Up x3, OK).
+  Hold = talk; on release the words are typed into the box and Enter is sent (Enter errors ignored).
+  If search wasn't opened in the last 90 s, a hold opens it first. Speech-to-text is offline inside the app
   (Vosk, `vosk-model-small-en-us-0.15`, downloaded and checksum-checked by CI into
   `app/src/main/assets/vosk-model-en`, unpacked to app storage on first run). The phone's own speech
   service is not used: on Dave's vivo it returned client errors (5).
@@ -29,8 +32,9 @@ Built for a vivo iQOO 12 Pro (has an IR blaster), Android 16.
   `/v1/FireTV/appsV2`, else known names), `dpad_left`, `dpad_up` x12 to reach the Leanback title search
   orb, select, types via `/v1/FireTV/text`, then `\n` to submit. Multi-step sequences wake the stick once,
   then retry each step individually (`submitMacro`).
-- **Channels tab:** hold 5 s to tick favourite YouTube channels. Subscriptions come from a Google Takeout
-  zip / subscriptions.csv (or added by name). Tapping a channel tile runs the SmartTube search for its name.
+- **Channels tab:** hold 5 s to tick favourite YouTube channels. Subscriptions come from YouTube sign-in
+  (`YouTubeAccount.java`: Google OAuth device flow + YouTube Data API v3 `subscriptions?mine=true`, using the
+  user's own "TVs and Limited Input devices" client ID), a Google Takeout zip / subscriptions.csv, or names. Tapping a channel tile runs the SmartTube search for its name.
   Avatars are scraped best-effort from the public channel page (og:image).
 
 ## Build
