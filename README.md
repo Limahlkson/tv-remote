@@ -47,6 +47,11 @@ Layout: `app/src/main/java/com/dave/tvremote/`
 - `IrRemote.java` – Hisense IR codes and NEC encoding
 - `Discovery.java` – SSDP scan for Fire TVs
 - `VoiceEngine.java` – offline hold-to-talk speech recognition
+- `TvScreen.java` – comments button: checks SmartTube's PlaybackActivity is in front, reads the screen with
+  `uiautomator dump`, finds the "Chat/Comments" control, steers focus with D-pad keys, presses OK
+- Hold any Apps/Channels tile: wiggle mode, drag to reorder, Done saves (`order_apps` / `order_channels`)
+- Mic tap with ADB: opens `youtube.com/tv?launch=voice` (SmartTube search, cursor in box) from any screen.
+  Settings button: `am start -a android.settings.SETTINGS` over ADB
 - `AdbClient.java` – minimal ADB-over-Wi-Fi client (port 5555, RSA auth) used to send SmartTube VIEW links:
   channel tiles open `youtube.com/channel/<id>` or `/@handle`; voice/typed search opens
   `youtube.com/results?search_query=...`. Needs ADB debugging on in the Fire TV's Developer options
