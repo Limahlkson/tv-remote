@@ -2199,34 +2199,137 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ keyboard
 
+    // ---- live typing: letters appear on the TV as you type ---------------------------------
+
+    final java.util.concurrent.ExecutorService typingExec = java.util.concurrent.Executors.newSingleThreadExecutor();
+    volatile String typedOnTv = "", typedWanted = "";
+    volatile boolean typingQueued, warnedNoDelete;
+    TextView liveStatus;
+
     void showKeyboard() {
         if (!checkPaired()) return;
         buzz();
+        typedOnTv = "";
+        typedWanted = "";
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
         TextView hint = new TextView(this);
-        hint.setText("Select a search box on the TV first, then type here.");
+        hint.setText("Pick a text box on the TV, then type. Letters appear on the TV as you type. "
+                + "Enter on your keyboard presses OK.");
         hint.setTextColor(DIM);
         box.addView(hint);
         EditText et = new EditText(this);
         et.setSingleLine(true);
         et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        et.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
         box.addView(et);
+        liveStatus = new TextView(this);
+        liveStatus.setTextColor(DIM);
+        liveStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        liveStatus.setText("On TV: nothing yet");
+        box.addView(liveStatus);
+
         AlertDialog d = new AlertDialog.Builder(this, R.style.DialogTheme)
                 .setTitle("Type on TV")
                 .setView(box)
-                .setPositiveButton("Send", (di, w) -> ftv.typeText(et.getText().toString(), false))
-                .setNeutralButton("Send + OK", (di, w) -> ftv.typeText(et.getText().toString(), true))
-                .setNegativeButton("Cancel", null)
+                .setPositiveButton("OK on TV", null)
+                .setNegativeButton("Close", null)
                 .create();
+        et.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence c, int a, int b, int n) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence c, int a, int b, int n) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable ed) {
+                liveType(ed.toString());
+            }
+        });
+        Runnable pressOk = () -> {
+            buzz();
+            liveType(et.getText().toString());
+            typingExec.execute(() -> {
+                try {
+                    ftv.selectNow();
+                } catch (Exception e) {
+                    h.post(() -> failed("OK didn't reach the TV"));
+                }
+            });
+            d.dismiss();
+        };
+        et.setOnEditorActionListener((v, actionId, event) -> {
+            boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                    && event.getAction() == KeyEvent.ACTION_DOWN;
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+                    || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                    || actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO || enter) {
+                pressOk.run();
+                return true;
+            }
+            return false;
+        });
         d.setOnShowListener(x -> {
+            d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> pressOk.run());
             et.requestFocus();
             InputMethodManager imm = getSystemService(InputMethodManager.class);
             if (imm != null) imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT);
         });
+        d.setOnDismissListener(x -> liveStatus = null);
         d.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
         d.show();
+    }
+
+    /** Remember what the box should say; one background job keeps the TV in step, in order. */
+    void liveType(String now) {
+        typedWanted = now;
+        if (typingQueued) return;
+        typingQueued = true;
+        typingExec.execute(this::flushTyping);
+    }
+
+    /** Works out what changed since the last update: Backspace for removed letters, then type the new ones. */
+    void flushTyping() {
+        try {
+            while (true) {
+                typingQueued = false;
+                String want = typedWanted, have = typedOnTv;
+                if (want.equals(have)) return;
+                int p = 0, max = Math.min(want.length(), have.length());
+                while (p < max && want.charAt(p) == have.charAt(p)) p++;
+                if (p > 0 && Character.isHighSurrogate(want.charAt(p - 1))) p--;
+                int deletes = have.codePointCount(p, have.length());
+                String add = want.substring(p);
+                if (deletes > 0) deleteOnTv(deletes);
+                if (!add.isEmpty()) ftv.typeNow(add);
+                typedOnTv = want;
+                final String shown = want;
+                h.post(() -> {
+                    if (liveStatus != null) liveStatus.setText(shown.isEmpty() ? "On TV: (empty)" : "On TV: “" + shown + "”");
+                });
+            }
+        } catch (Exception e) {
+            typedOnTv = typedWanted; // don't keep retrying the same letters
+            h.post(() -> failed("typing didn't reach the TV"));
+        }
+    }
+
+    /** Backspace on the TV. Needs the developer connection; the Fire TV remote API has no delete. */
+    void deleteOnTv(int count) throws Exception {
+        if (!adbReady()) {
+            if (!warnedNoDelete) {
+                warnedNoDelete = true;
+                h.post(() -> failed("deleting on the TV needs the developer connection (⋮ > Direct links)"));
+            }
+            return;
+        }
+        StringBuilder cmd = new StringBuilder("input keyevent");
+        for (int i = 0; i < count; i++) cmd.append(" 67");
+        adb.exec(ftv.getIp(), cmd.toString(), 8000);
     }
 
     // ------------------------------------------------------------------ settings

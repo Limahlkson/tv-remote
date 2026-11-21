@@ -408,6 +408,16 @@ public class FireTvClient {
         submit(() -> post("/v1/FireTV/app/" + pkg, null));
     }
 
+    /** Blocking: types now on the calling (background) thread. Used by live typing to keep order. */
+    public void typeNow(String text) throws IOException, AuthException {
+        typeChars(text);
+    }
+
+    /** Blocking: OK / Select now on the calling (background) thread. */
+    public void selectNow() throws IOException, AuthException {
+        stepSelect();
+    }
+
     public void typeText(String text, boolean thenSelect) {
         submit(() -> {
             for (int i = 0; i < text.length(); ) {
