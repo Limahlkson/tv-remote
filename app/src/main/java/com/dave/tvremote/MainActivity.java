@@ -91,6 +91,7 @@ public class MainActivity extends Activity {
         ftv = new FireTvClient();
         ftv.configure(prefs.getString("ip", null), prefs.getString("token", null), prefs.getString("mac", null));
         ftv.setListener(this::onFireTvStatus);
+        yt = new YouTubeAccount(prefs);
         voice = new VoiceEngine();
         voice.prepare(this, 2); // bump when the bundled model changes
 
@@ -281,7 +282,7 @@ public class MainActivity extends Activity {
                 .iconScale(0.36f).action(() -> irPress(IrRemote.MUTE, false), false);
         padArea.addView(mute, cornerLp(corner, Gravity.TOP | Gravity.END));
         Widgets.CircleButton mic = new Widgets.CircleButton(this, Icons.MIC, 0xFFCC0000, 0xFFFFFFFF)
-                .iconScale(0.34f).action(this::voiceDown, false).release(this::voiceUp);
+                .iconScale(0.34f).action(this::micDown, false).release(this::micUp);
         micBtn = mic;
         FrameLayout.LayoutParams micLp = new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.TOP | Gravity.END);
         micLp.topMargin = corner - dp(10) + dp(8);
@@ -643,54 +644,124 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Mic pressed: start listening straight away. */
-    void voiceDown() {
-        if (!checkPaired()) return;
+    static final long TAP_MS = 450;           // shorter than this = tap (open search), longer = speech
+    static final long SEARCH_OPEN_FOR_MS = 90_000;
+    long micDownAt, lastSearchOpenAt;
+    boolean recording;
+    final Runnable showListening = () -> {
+        if (micHeld && recording) {
+            buzz();
+            showVoiceBanner("Listening…   let go to type it on the TV");
+            micBtn.setFill(0xFF2E7D32);
+        }
+    };
+
+    /** Mic down: start recording at once so the first word isn't lost; a quick tap throws it away. */
+    void micDown() {
         buzz();
+        micDownAt = System.currentTimeMillis();
+        micHeld = true;
+        lastHeard = null;
+        recording = false;
+        if (!ftv.isPaired()) return;
+        boolean haveMic = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (haveMic && voice.state() == VoiceEngine.READY && !voice.isRecording()) {
+            recording = voice.start(new VoiceEngine.Listener() {
+                @Override
+                public void onPartial(String text) {
+                    lastHeard = text;
+                    if (System.currentTimeMillis() - micDownAt >= TAP_MS) {
+                        showVoiceBanner("“" + text + "”" + (micHeld ? "   let go to type it" : "   typing…"));
+                    }
+                }
+
+                @Override
+                public void onFinal(String text) {
+                    recording = false;
+                    endVoiceUi();
+                    String q = text != null && !text.isEmpty() ? text : (lastHeard == null ? "" : lastHeard);
+                    if (q.isEmpty()) {
+                        toast("Didn't catch that. Hold the mic, speak, then let go.");
+                    } else {
+                        sendSpokenSearch(q);
+                    }
+                }
+
+                @Override
+                public void onError(String message) {
+                    recording = false;
+                    endVoiceUi();
+                    toast(message);
+                }
+            });
+        }
+        h.postDelayed(showListening, TAP_MS);
+    }
+
+    /** Mic up: a tap opens the search box; after a hold, the words are typed into it. */
+    void micUp() {
+        micHeld = false;
+        h.removeCallbacks(showListening);
+        long held = System.currentTimeMillis() - micDownAt;
+        if (held < TAP_MS) {
+            if (recording) voice.cancel();
+            recording = false;
+            endVoiceUi();
+            tapOpenSearch();
+            return;
+        }
+        if (!checkPaired()) return;
+        if (recording) {
+            showVoiceBanner(lastHeard != null ? "“" + lastHeard + "”   typing…" : "Working it out…");
+            voice.stop();
+            return;
+        }
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC);
-            return;
-        }
-        if (voice.isRecording()) return;
-        micHeld = true;
-        lastHeard = null;
-        boolean started = voice.start(new VoiceEngine.Listener() {
-            @Override
-            public void onPartial(String text) {
-                lastHeard = text;
-                showVoiceBanner("“" + text + "”" + (micHeld ? "   let go to search" : "   searching…"));
-            }
-
-            @Override
-            public void onFinal(String text) {
-                endVoiceUi();
-                String q = text != null && !text.isEmpty() ? text : (lastHeard == null ? "" : lastHeard);
-                if (q.isEmpty()) {
-                    toast("Didn't catch that. Hold the mic, speak, then let go.");
-                } else {
-                    runYouTubeSearch(q);
-                }
-            }
-
-            @Override
-            public void onError(String message) {
-                endVoiceUi();
-                toast(message);
-            }
-        });
-        if (started) {
-            showVoiceBanner("Listening…   let go to search");
-            micBtn.setFill(0xFF2E7D32);
+        } else {
+            toast("Voice: " + voiceStatus());
         }
     }
 
-    /** Mic released: stop listening; the words come back a moment later. */
-    void voiceUp() {
-        micHeld = false;
-        if (!voice.isRecording()) return;
-        showVoiceBanner(lastHeard != null ? "“" + lastHeard + "”   searching…" : "Working it out…");
-        voice.stop();
+    boolean searchUsesSmartTube() {
+        return prefs.getBoolean("useSmartTube", true);
+    }
+
+    /** Tap: put the TV on the search box, ready for speech. */
+    void tapOpenSearch() {
+        if (!checkPaired()) return;
+        String app = searchUsesSmartTube() ? "SmartTube" : "YouTube";
+        toast("Opening " + app + " search…");
+        ftv.openSearch(searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
+            if (err != null) {
+                searchError(err);
+            } else {
+                lastSearchOpenAt = System.currentTimeMillis();
+                toast(app + " search is open. Hold the mic and speak.");
+            }
+        });
+    }
+
+    /** Spoken words: type them into the search box (opening it first if it wasn't opened recently). */
+    void sendSpokenSearch(String q) {
+        boolean openFirst = System.currentTimeMillis() - lastSearchOpenAt > SEARCH_OPEN_FOR_MS;
+        showVoiceBanner("Typing on TV:  “" + q + "”");
+        ftv.typeSearch(q, openFirst, searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
+            lastSearchOpenAt = 0; // after a search the box isn't focused any more
+            h.postDelayed(this::endVoiceUi, 2500);
+            if (err != null) searchError(err);
+        });
+    }
+
+    void searchError(String err) {
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle(searchUsesSmartTube() ? "SmartTube search" : "YouTube search")
+                .setMessage(err)
+                .setPositiveButton("OK", null)
+                .setNeutralButton("Pick SmartTube", (d, w) -> pickSmartTubeApp())
+                .show();
     }
 
     void showVoiceBanner(String text) {
@@ -815,28 +886,19 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    /** Typed search or a channel tile: open the search box, type, search. */
     void runYouTubeSearch(String q) {
-        if (prefs.getBoolean("useSmartTube", true)) {
-            Toast.makeText(this, "Searching SmartTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
-            ftv.smartTubeSearch(smartTubePackage(), q, (pkg, err) -> {
-                if (err != null) {
-                    new AlertDialog.Builder(this, R.style.DialogTheme)
-                            .setTitle("SmartTube search")
-                            .setMessage(err)
-                            .setPositiveButton("OK", null)
-                            .setNeutralButton("Pick SmartTube", (d, w) -> pickSmartTubeApp())
-                            .show();
-                }
-            });
-        } else {
-            Toast.makeText(this, "Searching YouTube for \"" + q + "\"…", Toast.LENGTH_LONG).show();
-            ftv.youtubeSearch(q, (ok, err) -> {
-                if (err != null) toast(err);
-            });
-        }
+        if (!checkPaired()) return;
+        toast("Searching " + (searchUsesSmartTube() ? "SmartTube" : "YouTube") + " for \"" + q + "\"…");
+        ftv.typeSearch(q, true, searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
+            lastSearchOpenAt = 0;
+            if (err != null) searchError(err);
+        });
     }
 
     // ---- YouTube channel favourites (Channels tab) --------------------------------------
+
+    YouTubeAccount yt;
 
     static class Channel {
         String id = "", title = "";
@@ -1077,14 +1139,7 @@ public class MainActivity extends Activity {
     void showChannelManager() {
         List<Channel> all = loadChannels();
         if (all.isEmpty()) {
-            new AlertDialog.Builder(this, R.style.DialogTheme)
-                    .setTitle("Your YouTube channels")
-                    .setMessage("Bring in your YouTube subscriptions once (a file from Google Takeout), "
-                            + "or add channels by name. Then tick your favourites and they'll show in the Channels tab.")
-                    .setPositiveButton("Import subscriptions", (d, w) -> startImport())
-                    .setNeutralButton("How to get the file", (d, w) -> showTakeoutHelp())
-                    .setNegativeButton("Add by name", (d, w) -> askAddChannel())
-                    .show();
+            channelSourcesMenu("Get your YouTube channels");
             return;
         }
         java.util.Set<String> fav = loadFavKeys();
@@ -1104,16 +1159,208 @@ public class MainActivity extends Activity {
                     selectTab(2);
                     toast(keys.size() + " favourite channel" + (keys.size() == 1 ? "" : "s"));
                 })
-                .setNeutralButton("Import / add…", (d, w) -> new AlertDialog.Builder(this, R.style.DialogTheme)
-                        .setItems(new String[]{"Import subscriptions file", "Add a channel by name",
-                                "How to get the subscriptions file"}, (d2, w2) -> {
-                            if (w2 == 0) startImport();
-                            else if (w2 == 1) askAddChannel();
-                            else showTakeoutHelp();
-                        })
-                        .show())
+                .setNeutralButton("More…", (d, w) -> channelSourcesMenu("Channels"))
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    /** Where channels come from: YouTube sign-in, a Takeout file, or typed names. */
+    void channelSourcesMenu(String title) {
+        List<String> labels = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        if (yt.signedIn()) {
+            labels.add("Refresh from my YouTube account");
+            actions.add(this::importFromYouTube);
+        } else {
+            labels.add("Sign in with YouTube (fetch my subscriptions)");
+            actions.add(this::signInYouTube);
+        }
+        labels.add("Import a Google Takeout file instead");
+        actions.add(this::startImport);
+        labels.add("How to get the Takeout file");
+        actions.add(this::showTakeoutHelp);
+        labels.add("Add a channel by name");
+        actions.add(this::askAddChannel);
+        if (yt.signedIn()) {
+            labels.add("Sign out of YouTube");
+            actions.add(() -> {
+                yt.signOut();
+                toast("Signed out of YouTube");
+            });
+        }
+        if (yt.hasClient()) {
+            labels.add("Change Google client ID");
+            actions.add(this::showYouTubeClientSetup);
+        }
+        new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle(title)
+                .setItems(labels.toArray(new String[0]), (d, w) -> actions.get(w).run())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    void signInYouTube() {
+        if (!yt.hasClient()) {
+            showYouTubeClientSetup();
+        } else {
+            doDeviceSignIn();
+        }
+    }
+
+    /** One-off: the user's own Google client ID (YouTube only allows sign-in through one). */
+    void showYouTubeClientSetup() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        TextView steps = new TextView(this);
+        steps.setTextColor(TEXT);
+        steps.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        steps.setText("YouTube only lets apps read your subscriptions through Google's official sign-in, "
+                + "which needs a free client ID from your own Google Cloud account. One-off, about 5 minutes:\n\n"
+                + "1. Tap Open Google Cloud, sign in, create a project (any name, e.g. TV Remote).\n"
+                + "2. APIs & Services > Library: search \"YouTube Data API v3\" and Enable it.\n"
+                + "3. OAuth consent screen / Google Auth Platform: Get started, app name TV Remote, your email, "
+                + "audience External. Under Audience > Test users, add your own Gmail.\n"
+                + "4. Credentials (Clients) > Create OAuth client ID > type \"TVs and Limited Input devices\" > Create.\n"
+                + "5. Copy the Client ID and Client secret into the boxes below.");
+        box.addView(steps);
+        EditText id = new EditText(this);
+        id.setHint("Client ID (ends .apps.googleusercontent.com)");
+        id.setSingleLine(true);
+        id.setText(prefs.getString("ytClientId", ""));
+        box.addView(id);
+        EditText secret = new EditText(this);
+        secret.setHint("Client secret");
+        secret.setSingleLine(true);
+        secret.setText(prefs.getString("ytClientSecret", ""));
+        box.addView(secret);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(box);
+        AlertDialog d = new AlertDialog.Builder(this, R.style.DialogTheme)
+                .setTitle("Sign in with YouTube")
+                .setView(sv)
+                .setPositiveButton("Save & sign in", null)
+                .setNeutralButton("Open Google Cloud", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        d.setOnShowListener(x -> {
+            d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> openUrl(
+                    "https://console.cloud.google.com/apis/credentials"));
+            d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String cid = id.getText().toString().trim();
+                String sec = secret.getText().toString().trim();
+                if (!cid.contains(".apps.googleusercontent.com") || sec.isEmpty()) {
+                    toast("Paste both the Client ID and the Client secret");
+                    return;
+                }
+                yt.setClient(cid, sec);
+                d.dismiss();
+                doDeviceSignIn();
+            });
+        });
+        d.show();
+    }
+
+    void openUrl(String url) {
+        try {
+            startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+        } catch (Exception e) {
+            toast("No browser found");
+        }
+    }
+
+    /** Google shows a code; the user enters it at google.com/device; we wait for the approval. */
+    void doDeviceSignIn() {
+        toast("Asking Google for a sign-in code…");
+        yt.startSignIn((dc, err) -> {
+            if (dc == null) {
+                new AlertDialog.Builder(this, R.style.DialogTheme)
+                        .setTitle("Couldn't start sign-in")
+                        .setMessage(err + "\n\nCheck the client ID is type \"TVs and Limited Input devices\" "
+                                + "and the YouTube Data API v3 is enabled.")
+                        .setPositiveButton("OK", null)
+                        .setNeutralButton("Change client ID", (x, y) -> showYouTubeClientSetup())
+                        .show();
+                return;
+            }
+            java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+            AlertDialog d = new AlertDialog.Builder(this, R.style.DialogTheme)
+                    .setTitle("Sign in with YouTube")
+                    .setMessage("1. Go to  " + dc.url.replace("https://", "") + "\n"
+                            + "2. Enter this code:\n\n        " + dc.userCode + "\n\n"
+                            + "3. Pick your YouTube account and tap Allow.\n\n"
+                            + "This screen carries on by itself once you've allowed it.")
+                    .setPositiveButton("Open page", null)
+                    .setNeutralButton("Copy code", null)
+                    .setNegativeButton("Cancel", (x, y) -> cancelled.set(true))
+                    .setCancelable(false)
+                    .create();
+            d.setOnShowListener(x -> {
+                d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    copyText(dc.userCode);
+                    openUrl(dc.url);
+                });
+                d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> copyText(dc.userCode));
+            });
+            d.show();
+            yt.waitForApproval(dc, cancelled, (ok, err2) -> {
+                if (cancelled.get()) return;
+                try {
+                    d.dismiss();
+                } catch (Exception ignored) {
+                }
+                if (Boolean.TRUE.equals(ok)) {
+                    toast("Signed in to YouTube");
+                    importFromYouTube();
+                } else {
+                    new AlertDialog.Builder(this, R.style.DialogTheme)
+                            .setTitle("Sign-in didn't finish")
+                            .setMessage(err2 + "\n\nIf it says access was blocked, add your Gmail as a test user "
+                                    + "on the OAuth consent screen.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                }
+            });
+        });
+    }
+
+    void copyText(String t) {
+        android.content.ClipboardManager cm = getSystemService(android.content.ClipboardManager.class);
+        if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("code", t));
+        toast("Code copied: " + t);
+    }
+
+    /** Pull the subscription list from the signed-in account and merge it in. */
+    void importFromYouTube() {
+        toast("Fetching your YouTube subscriptions…");
+        yt.fetchSubscriptions((subs, err) -> {
+            if (subs == null) {
+                new AlertDialog.Builder(this, R.style.DialogTheme)
+                        .setTitle("Couldn't get your subscriptions")
+                        .setMessage(err)
+                        .setPositiveButton("OK", null)
+                        .setNeutralButton("Sign in again", (x, y) -> signInYouTube())
+                        .show();
+                return;
+            }
+            List<Channel> all = loadChannels();
+            java.util.Map<String, Channel> byKey = new java.util.LinkedHashMap<>();
+            for (Channel c : all) byKey.put(c.key(), c);
+            SharedPreferences.Editor ed = prefs.edit();
+            int added = 0;
+            for (YouTubeAccount.Sub sub : subs) {
+                Channel c = new Channel();
+                c.id = sub.id == null ? "" : sub.id;
+                c.title = sub.title;
+                if (!byKey.containsKey(c.key())) added++;
+                byKey.put(c.key(), c);
+                if (!c.id.isEmpty() && sub.thumb != null) ed.putString("avatar_" + c.id, sub.thumb);
+            }
+            ed.apply();
+            saveChannels(new ArrayList<>(byKey.values()));
+            toast(subs.size() + " subscriptions (" + added + " new). Tick your favourites.");
+            showChannelManager();
+        });
     }
 
     void showTakeoutHelp() {

@@ -43,7 +43,7 @@ public class VoiceEngine {
     private volatile Model model;
     private volatile int state = LOADING;
     private volatile String failReason;
-    private volatile boolean running;
+    private volatile boolean running, cancelled;
     private Thread worker;
 
     public int state() {
@@ -85,6 +85,7 @@ public class VoiceEngine {
             return false;
         }
         if (running) return false;
+        cancelled = false;
         running = true;
         worker = new Thread(() -> record(l), "voice-rec");
         worker.start();
@@ -93,6 +94,12 @@ public class VoiceEngine {
 
     /** Stop listening; the final words arrive via onFinal shortly after. */
     public void stop() {
+        running = false;
+    }
+
+    /** Stop listening and throw the audio away (a quick tap, not speech). */
+    public void cancel() {
+        cancelled = true;
         running = false;
     }
 
@@ -124,7 +131,7 @@ public class VoiceEngine {
                     append(done, field(r.getResult(), "text"));
                 } else {
                     String shown = join(done.toString(), field(r.getPartialResult(), "partial"));
-                    if (!shown.equals(lastShown) && !shown.isEmpty()) {
+                    if (!cancelled && !shown.equals(lastShown) && !shown.isEmpty()) {
                         lastShown = shown;
                         main.post(() -> l.onPartial(shown));
                     }
@@ -134,12 +141,13 @@ public class VoiceEngine {
                 rec.stop();
             } catch (Exception ignored) {
             }
+            if (cancelled) return;
             append(done, field(r.getFinalResult(), "text"));
             String text = done.toString().trim();
             main.post(() -> l.onFinal(text));
         } catch (Throwable t) {
             String msg = t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName();
-            main.post(() -> l.onError("Mic error: " + msg));
+            if (!cancelled) main.post(() -> l.onError("Mic error: " + msg));
         } finally {
             running = false;
             if (rec != null) {

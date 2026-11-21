@@ -272,73 +272,120 @@ public class FireTvClient {
         step("/v1/FireTV?action=select", "{\"keyActionType\":\"keyUp\"}");
     }
 
-    /**
-     * Opens YouTube on the Fire TV, moves to its Search page and types the query.
-     */
-    public void youtubeSearch(String query, Callback<String> done) {
-        submitMacro(() -> {
-            step("/v1/FireTV?action=home", null);
-            sleep(1200);
-            step("/v1/FireTV/app/" + YOUTUBE, null);
-            sleep(7000);
-            step("/v1/FireTV?action=dpad_left", null);
-            sleep(700);
-            for (int i = 0; i < 6; i++) {
-                step("/v1/FireTV?action=dpad_up", null);
-                sleep(250);
-            }
-            stepSelect();
-            sleep(1800);
-            typeChars(query);
-        }, done);
+    /** What the Fire TV says about text-input focus; used to spot when a search box has opened. */
+    private String keyboardState() {
+        try {
+            Resp r = request("GET", base(ip) + "/v1/FireTV/keyboard", null, true, 1200, 1500);
+            return r.code + ":" + r.body;
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private void openYouTubeSteps() throws IOException, AuthException {
+        step("/v1/FireTV?action=home", null);
+        sleep(1200);
+        step("/v1/FireTV/app/" + YOUTUBE, null);
+        sleep(7000);
+        step("/v1/FireTV?action=dpad_left", null);
+        sleep(700);
+        for (int i = 0; i < 6; i++) {
+            step("/v1/FireTV?action=dpad_up", null);
+            sleep(250);
+        }
+        stepSelect();
+        sleep(1500);
     }
 
     /**
-     * SmartTube: bring it to the front, select the search button at the top of its side menu,
-     * type the words, press Enter. Package: the one chosen in settings, else the one the
-     * Fire TV's app list says is installed, else the known names.
+     * Gets SmartTube onto its search screen with the box focused, from anywhere (including a playing video).
+     * 1) "@" is SmartTube's own open-search key, in its menus and in its player. If the Fire TV then
+     *    reports a different, steady text-focus state, the search box is up and we're done (~1.5 s).
+     * 2) Otherwise: Back, Back (leaves a playing video; on the menu it only shows "press again to exit",
+     *    and if SmartTube did close, the launch below reopens it), bring SmartTube forward,
+     *    Up to its search button, OK.
      */
-    public void smartTubeSearch(String chosenPkg, String query, Callback<String> done) {
-        final String[] used = {null};
-        submitMacro(() -> {
-            List<String> order = new ArrayList<>();
-            if (chosenPkg != null && !chosenPkg.isEmpty()) order.add(chosenPkg);
+    private void openSmartTubeSteps(String chosenPkg) throws IOException, AuthException {
+        String before = keyboardState();
+        try {
+            JSONObject o = new JSONObject();
+            o.put("text", "@");
+            post("/v1/FireTV/text", o.toString());
+        } catch (Exception ignored) {
+        }
+        sleep(1000);
+        String after1 = keyboardState();
+        sleep(300);
+        String after2 = keyboardState();
+        if (!after1.isEmpty() && after1.equals(after2) && !after1.equals(before)) return; // search box is up
+
+        step("/v1/FireTV?action=back", null);
+        sleep(500);
+        step("/v1/FireTV?action=back", null);
+        sleep(700);
+        launchSmartTube(chosenPkg);
+        sleep(2000);
+        for (int i = 0; i < 3; i++) {
+            step("/v1/FireTV?action=dpad_up", null);
+            sleep(250);
+        }
+        stepSelect();
+        sleep(1200);
+    }
+
+    private void launchSmartTube(String chosenPkg) throws IOException, AuthException {
+        List<String> order = new ArrayList<>();
+        if (chosenPkg != null && !chosenPkg.isEmpty()) order.add(chosenPkg);
+        if (order.isEmpty()) {
             try {
                 for (App a : fetchApps()) if (isSmartTube(a) && !order.contains(a.id)) order.add(a.id);
             } catch (Exception ignored) {
             }
-            for (String k : SMARTTUBE) if (!order.contains(k)) order.add(k);
-            for (String pkg : order) {
-                Resp r = request("POST", base(ip) + "/v1/FireTV/app/" + pkg, "", true, 1500, 4000);
-                if (r.code == 401 || r.code == 403) throw new AuthException(r.body);
-                String desc = "";
-                try {
-                    desc = new JSONObject(r.body).optString("description", "").toLowerCase();
-                } catch (Exception ignored) {
-                }
-                if (r.code >= 200 && r.code < 300 && !desc.contains("not") && !desc.contains("fail")) {
-                    used[0] = pkg;
-                    break;
-                }
+        }
+        for (String k : SMARTTUBE) if (!order.contains(k)) order.add(k);
+        for (String pkg : order) {
+            Resp r = request("POST", base(ip) + "/v1/FireTV/app/" + pkg, "", true, 1500, 4000);
+            if (r.code == 401 || r.code == 403) throw new AuthException(r.body);
+            String desc = "";
+            try {
+                desc = new JSONObject(r.body).optString("description", "").toLowerCase();
+            } catch (Exception ignored) {
             }
-            if (used[0] == null) {
-                throw new IllegalStateException("SmartTube wasn't found on the Fire TV. Pick it in ⋮ > SmartTube app.");
+            if (r.code >= 200 && r.code < 300 && !desc.contains("not") && !desc.contains("fail")) return;
+        }
+        throw new IllegalStateException("SmartTube wasn't found on the Fire TV. Pick it in ⋮ > SmartTube app.");
+    }
+
+    /** Types into whatever box has focus, then presses Enter. Enter's reply is ignored: the TV may error on it. */
+    private void typeAndSubmit(String text) throws IOException, AuthException {
+        typeChars(text);
+        sleep(350);
+        try {
+            JSONObject o = new JSONObject();
+            o.put("text", "\n");
+            post("/v1/FireTV/text", o.toString());
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Tap on the mic: open the search box, ready for speech. */
+    public void openSearch(boolean smartTube, String chosenPkg, Callback<String> done) {
+        submitMacro(() -> {
+            if (smartTube) openSmartTubeSteps(chosenPkg);
+            else openYouTubeSteps();
+        }, done);
+    }
+
+    /** After speaking: type into the open search box (opening it first if asked) and search. */
+    public void typeSearch(String query, boolean openFirst, boolean smartTube, String chosenPkg,
+                           Callback<String> done) {
+        submitMacro(() -> {
+            if (openFirst) {
+                if (smartTube) openSmartTubeSteps(chosenPkg);
+                else openYouTubeSteps();
             }
-            sleep(3000);                                   // quick if already open, allows a cold start
-            step("/v1/FireTV?action=dpad_left", null);     // into the side menu
-            sleep(600);
-            for (int i = 0; i < 12; i++) {                 // search button sits above the menu
-                step("/v1/FireTV?action=dpad_up", null);
-                sleep(200);
-            }
-            stepSelect();
-            sleep(1600);                                   // search screen opens with the box focused
-            typeChars(query);
-            sleep(500);
-            typeChars("\n");                              // Enter runs the search
-        }, (ok, err) -> {
-            if (done != null) done.done(ok != null ? used[0] : null, err);
-        });
+            typeAndSubmit(query);
+        }, done);
     }
 
     /** Installed, launchable apps from the Fire TV (blocking; call off the main thread). */
@@ -650,7 +697,14 @@ public class FireTvClient {
     // ---------------------------------------------------------------- http
 
     private void post(String path, String body) throws IOException, AuthException {
-        Resp r = request("POST", base(ip) + path, body == null ? "" : body, true, 1500, 2500);
+        Resp r;
+        try {
+            r = request("POST", base(ip) + path, body == null ? "" : body, true, 1500, 2500);
+        } catch (java.net.SocketTimeoutException | java.net.ConnectException e) {
+            throw e;
+        } catch (IOException stale) {
+            r = request("POST", base(ip) + path, body == null ? "" : body, true, 1500, 2500);
+        }
         if (r.code == 401 || r.code == 403) throw new AuthException(r.body);
         if (r.code >= 500) throw new IOException("HTTP " + r.code);
     }
@@ -710,8 +764,9 @@ public class FireTvClient {
             InputStream in = r.code >= 400 ? c.getErrorStream() : c.getInputStream();
             r.body = in == null ? "" : readAll(in);
             return r;
-        } finally {
+        } catch (IOException e) {
             c.disconnect();
+            throw e;
         }
     }
 
