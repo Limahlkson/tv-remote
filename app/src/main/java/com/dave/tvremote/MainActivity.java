@@ -733,6 +733,11 @@ public class MainActivity extends Activity {
     /** Tap: put the TV on the search box, ready for speech. */
     void tapOpenSearch() {
         if (!checkPaired()) return;
+        if (adbReady() && searchUsesSmartTube()) {
+            // direct link: SmartTube opens Search with the cursor in the box (no key presses, picker auto-closed)
+            openOnTv("https://www.youtube.com/tv?launch=voice", "Opening search…");
+            return;
+        }
         String app = searchUsesSmartTube() ? "SmartTube" : "YouTube";
         toast("Opening " + app + " search…");
         ftv.openSearch(searchUsesSmartTube(), smartTubePackage(), (ok, err) -> {
@@ -1164,7 +1169,12 @@ public class MainActivity extends Activity {
         String pkg = smartTubePackage();
         String find = pkg != null ? "p=" + shellQuote(pkg) + "; "
                 : "p=$(pm list packages | grep -i -E 'smarttube|videomanager' | head -n 1 | cut -d: -f2); ";
-        String cmd = find + "am start -a android.intent.action.VIEW -d " + shellQuote(url) + " -p \"$p\"";
+        // SmartTube re-runs its start-up steps for every link, which can pop up its account picker.
+        // Watch for that picker for a few seconds and close it with Back: the current account stays selected.
+        String cmd = find + "am start -a android.intent.action.VIEW -d " + shellQuote(url) + " -p \"$p\"; "
+                + "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.5; "
+                + "if dumpsys window | grep -E 'mCurrentFocus|mFocusedWindow' | grep -q AppDialogActivity; "
+                + "then input keyevent 4; break; fi; done";
         adb.shell(ftv.getIp(), cmd, () -> showVoiceBanner("On the TV: tick Always allow, then OK (use the trackpad)"),
                 (out, err) -> {
                     if (err != null) {
